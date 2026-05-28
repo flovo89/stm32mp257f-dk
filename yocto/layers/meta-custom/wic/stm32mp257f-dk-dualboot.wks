@@ -1,0 +1,56 @@
+# =============================================================================
+# STM32MP257F-DK — 32 GB SD card, GPT, dual A/B OTA layout
+# =============================================================================
+#
+# Partition map:
+#  #  Label       FS      Size      Contents
+#  1  fsbl1       raw     256 KB    TF-A BL2 (first copy)
+#  2  fsbl2       raw     256 KB    TF-A BL2 (backup)
+#  3  metadata1   raw       1 MB    SWUpdate metadata
+#  4  metadata2   raw       1 MB    SWUpdate metadata backup
+#  5  fip-a       raw       4 MB    FIP slot A (OP-TEE + U-Boot)
+#  6  fip-b       raw       4 MB    FIP slot B (for FIP A/B update)
+#  7  uenv        raw     512 KB    U-Boot environment (libubootenv)
+#  8  boot-a      FAT32   64 MB    fitImage + DTB slot A
+#  9  boot-b      FAT32   64 MB    fitImage + DTB slot B
+# 10  rootfs-a    ext4     2 GB    Root filesystem slot A  ← initial
+# 11  rootfs-b    ext4     2 GB    Root filesystem slot B  ← OTA target
+# 12  userdata    ext4  ~24 GB    Persistent user/app data
+#
+# Note: The STM32MP2 ROM bootloader identifies FSBL by the STM32 image header
+# and the specific GPT partition type GUID used by ST (0x8301 in practice the
+# label 'fsbl1-boot' / 'fsbl2-boot' is what the ROM searches for).
+# =============================================================================
+
+bootloader --ptable gpt
+
+# TF-A BL2 — first and backup copies
+part fsbl1     --source rawcopy --sourceparams="file=tf-a-stm32mp257f-dk.stm32" \
+               --ondisk mmcblk --label fsbl1     --align 34    --size 256k
+part fsbl2     --source rawcopy --sourceparams="file=tf-a-stm32mp257f-dk.stm32" \
+               --ondisk mmcblk --label fsbl2     --align 256   --size 256k
+
+# SWUpdate metadata (used by swupdate's -bootloader handler / ST boot algorithm)
+part metadata1 --ondisk mmcblk --label metadata1 --align 256   --size 1024k
+part metadata2 --ondisk mmcblk --label metadata2 --align 256   --size 1024k
+
+# FIP — contains OP-TEE + U-Boot BL33
+part fip-a     --source rawcopy --sourceparams="file=fip-stm32mp257f-dk.bin" \
+               --ondisk mmcblk --label fip-a     --align 256   --size 4096k
+part fip-b     --ondisk mmcblk --label fip-b     --align 256   --size 4096k
+
+# U-Boot environment (libubootenv / fw_env.config points here)
+part uenv      --ondisk mmcblk --label uenv      --align 256   --size 512k
+
+# Boot partitions (FAT32 — kernel + DTB)
+part boot-a    --source bootimg-partition \
+               --ondisk mmcblk --fstype vfat --label boot-a --align 256 --size 65536k
+part boot-b    --ondisk mmcblk --fstype vfat --label boot-b --align 256 --size 65536k
+
+# Root filesystem partitions (ext4)
+part rootfs-a  --source rootfs \
+               --ondisk mmcblk --fstype ext4 --label rootfs-a --align 256 --size 2097152k
+part rootfs-b  --ondisk mmcblk --fstype ext4 --label rootfs-b --align 256 --size 2097152k
+
+# Persistent user data — fills remaining ~24 GB
+part userdata  --ondisk mmcblk --fstype ext4 --label userdata --align 256 --fill

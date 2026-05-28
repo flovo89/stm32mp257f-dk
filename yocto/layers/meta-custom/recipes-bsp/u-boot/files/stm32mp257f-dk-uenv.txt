@@ -1,0 +1,16 @@
+# U-Boot default environment for STM32MP257F-DK A/B dual boot
+# Written to 'uenv' GPT partition by flash-sdcard.sh
+
+# Active boot slot: 'a' or 'b'
+boot_side=a
+
+# Set to '1' by SWUpdate after writing a new image.
+# U-Boot increments bootcount; if it reaches bootlimit it rolls back.
+upgrade_available=0
+bootcount=0
+bootlimit=3
+
+# Kernel command line additions
+extra_bootargs=console=ttySTM0,115200 earlycon rw
+
+# --- Do not edit below; see boot.cmd for the boot logic ---

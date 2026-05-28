@@ -1,0 +1,8 @@
+# Everything fetched by west update — not versioned here
+zephyr/
+modules/
+bootloader/
+tools/
+
+# west workspace metadata
+.west/

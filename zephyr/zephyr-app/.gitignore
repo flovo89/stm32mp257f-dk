@@ -1,0 +1,10 @@
+# Python virtual environment
+venv/
+
+# CMake / west build output
+build/
+
+# Downloaded SDK tarballs
+*.tar.xz
+*.tar.bz2
+*.tar.gz

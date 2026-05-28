@@ -1,0 +1,25 @@
+/*
+ * Board overlay for STM32MP257F-DK / Cortex-M33
+ *
+ * Defines the shared DDR window used for OpenAMP virtio rings and
+ * sets the chosen nodes expected by the openamp_rsc_table subsystem.
+ *
+ * The address 0x81200000 and size 1 MB must match what the Linux
+ * remoteproc / resource table reserves on the A35 side.
+ */
+
+/ {
+	chosen {
+		zephyr,ipc_shm = &ipc_shmem;
+		zephyr,ipc     = &mailbox;
+	};
+
+	ipc_shmem: memory@81200000 {
+		compatible = "mmio-sram";
+		reg = <0x81200000 DT_SIZE_M(1)>;
+	};
+};
+
+&mailbox {
+	status = "okay";
+};

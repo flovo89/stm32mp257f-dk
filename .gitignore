@@ -1,0 +1,11 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/
+
+# External tools repos (cloned independently, not versioned here)
+tools/edtt/
+tools/net-tools/

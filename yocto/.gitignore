@@ -1,0 +1,11 @@
+# Upstream layers cloned by setup.sh — not versioned here
+layers/poky/
+layers/meta-openembedded/
+layers/meta-arm/
+layers/meta-st-stm32mp/
+layers/meta-st-openstlinux/
+layers/meta-swupdate/
+
+# Bitbake build output and shared-state cache
+build/
+cache/

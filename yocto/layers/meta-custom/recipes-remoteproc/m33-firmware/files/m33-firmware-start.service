@@ -1,0 +1,18 @@
+[Unit]
+Description=Start Zephyr firmware on Cortex-M33 coprocessor
+# Must start after sysfs is ready but before networking (M33 may be needed for PHY init)
+After=sysinit.target local-fs.target
+Before=network.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/m33-firmware-start.sh
+ExecStop=/bin/sh -c 'echo stop > /sys/class/remoteproc/remoteproc0/state || true'
+TimeoutStartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

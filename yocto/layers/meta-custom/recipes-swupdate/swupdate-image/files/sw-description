@@ -1,0 +1,93 @@
+/*
+ * sw-description for STM32MP257F-DK dual A/B OTA update.
+ *
+ * Partition layout (by GPT label, so partition numbers don't matter):
+ *   boot-a / boot-b   : FAT32, kernel + DTB
+ *   rootfs-a / rootfs-b : ext4, root filesystem
+ *   uenv               : raw, U-Boot environment
+ *
+ * Usage:
+ *   # Update the INACTIVE slot (recommended — board determines which)
+ *   swupdate -i update.swu -e "stable,copy2"    # update slot B
+ *   swupdate -i update.swu -e "stable,copy1"    # update slot A
+ *
+ *   # Or let scripts/create-swu.sh and scripts/ota-update.sh handle slot selection.
+ *
+ * After update:
+ *   U-Boot reads 'boot_side' env var to pick the active slot.
+ *   'upgrade_available=1' triggers watchdog-style confirmation on first boot.
+ */
+software =
+{
+    version = "@@VERSION@@";
+    hardware-compatibility = ["1.0"];
+
+    /*
+     * stable/copy1 → writes slot A.  Select this when currently running B.
+     * stable/copy2 → writes slot B.  Select this when currently running A.
+     */
+    stable: {
+
+        copy1: {
+            images: (
+                {
+                    filename = "fitImage";
+                    type     = "raw";
+                    device   = "/dev/disk/by-partlabel/boot-a";
+                    sha256   = "";
+                },
+                {
+                    filename = "stm32mp257f-custom-image.ext4.gz";
+                    type     = "raw";
+                    compressed = "zlib";
+                    device   = "/dev/disk/by-partlabel/rootfs-a";
+                    sha256   = "";
+                }
+            );
+
+            scripts: (
+                {
+                    filename = "post-update.sh";
+                    type     = "shellscript";
+                }
+            );
+
+            bootenv: (
+                { name = "boot_side";         value = "a"; },
+                { name = "upgrade_available"; value = "1"; },
+                { name = "bootcount";         value = "0"; }
+            );
+        };
+
+        copy2: {
+            images: (
+                {
+                    filename = "fitImage";
+                    type     = "raw";
+                    device   = "/dev/disk/by-partlabel/boot-b";
+                    sha256   = "";
+                },
+                {
+                    filename = "stm32mp257f-custom-image.ext4.gz";
+                    type     = "raw";
+                    compressed = "zlib";
+                    device   = "/dev/disk/by-partlabel/rootfs-b";
+                    sha256   = "";
+                }
+            );
+
+            scripts: (
+                {
+                    filename = "post-update.sh";
+                    type     = "shellscript";
+                }
+            );
+
+            bootenv: (
+                { name = "boot_side";         value = "b"; },
+                { name = "upgrade_available"; value = "1"; },
+                { name = "bootcount";         value = "0"; }
+            );
+        };
+    };
+};
