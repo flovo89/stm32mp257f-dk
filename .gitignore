@@ -9,3 +9,6 @@ Thumbs.db
 # External tools repos (cloned independently, not versioned here)
 tools/edtt/
 tools/net-tools/
+
+downloads
+sstate-cache

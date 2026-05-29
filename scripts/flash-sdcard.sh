@@ -1,18 +1,37 @@
 #!/bin/bash
 # =============================================================================
-# Flash STM32MP257F-DK SD card from Yocto build artifacts
+# Flash STM32MP257F-DK SD card from Yocto build artifacts.
+# Partition layout matches the ST TSV (FlashLayout_sdcard_stm32mp257f-dk-optee).
+#
 # USAGE: sudo ./scripts/flash-sdcard.sh /dev/sdX [deploy_dir]
 # =============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEV="${1:-}"
-DEPLOY="${2:-${SCRIPT_DIR}/../yocto/build/tmp/deploy/images/stm32mp257f-dk}"
+DEPLOY="${2:-${SCRIPT_DIR}/../yocto/build/tmp/deploy/images/stm32mp25-disco}"
 
-# ---- sanity checks ----
+# ---------------------------------------------------------------------------
+# Partition layout — sector offsets derived from ST TSV (512-byte sectors)
+#
+#  #  Name        Start       End         Size
+#  1  fsbla1          34         545      256 KB  TF-A BL2 primary
+#  2  fsbla2         546        1057      256 KB  TF-A BL2 backup
+#  3  metadata1     1058        1569      256 KB  FWU metadata primary
+#  4  metadata2     1570        2081      256 KB  FWU metadata backup
+#  5  fip-a         2082       10273        4 MB  FIP slot A (OP-TEE + U-Boot)
+#  6  fip-b        10274       18465        4 MB  FIP slot B (OTA target)
+#  7  u-boot-env   18466       19489      512 KB  U-Boot environment
+#  8  bootfs       19490      150561       64 MB  Kernel + DTBs
+#  9  vendorfs    150562      662561      250 MB  Vendor filesystem
+# 10  rootfs      662562     9051169     4096 MB  Root filesystem
+# 11  userfs      9051170     end        rest     Persistent user data
+# ---------------------------------------------------------------------------
+
+# ---- sanity checks --------------------------------------------------------
 if [ -z "${DEV}" ]; then
     echo "Usage: $0 /dev/sdX [deploy_dir]"
-    echo "  List removable block devices: lsblk -d -o NAME,SIZE,MODEL,TRAN"
+    echo "  List block devices: lsblk -d -o NAME,SIZE,MODEL,TRAN"
     exit 1
 fi
 if [ "$(id -u)" -ne 0 ]; then
@@ -24,28 +43,33 @@ if [ ! -b "${DEV}" ]; then
     exit 1
 fi
 
-# Guard against accidentally targeting a system drive (>= 64 GB)
 SIZE_BYTES=$(blockdev --getsize64 "${DEV}")
 SIZE_GB=$((SIZE_BYTES / 1024 / 1024 / 1024))
 if [ "${SIZE_GB}" -gt 63 ]; then
-    echo "ERROR: ${DEV} looks too large (${SIZE_GB} GB). Aborting."
+    echo "ERROR: ${DEV} looks too large (${SIZE_GB} GB) — aborting to avoid wiping a system drive."
+    exit 1
+fi
+if [ "${SIZE_GB}" -lt 14 ]; then
+    echo "ERROR: ${DEV} is too small (${SIZE_GB} GB). Need at least 16 GB."
     exit 1
 fi
 
-echo "=== Flashing ${DEV} (${SIZE_GB} GB) ==="
-echo "Deploy dir: ${DEPLOY}"
-echo ""
-echo "WARNING: ALL DATA ON ${DEV} WILL BE ERASED."
-read -r -p "Type 'yes' to continue: " CONFIRM
-[ "${CONFIRM}" = "yes" ] || { echo "Aborted."; exit 1; }
+# ---- locate artifacts -----------------------------------------------------
+# Use the plain (non-OSTL) variants so that U-Boot loads stm32mp257f-dk.dtb.
+# The OSTL external-DT variants force fdtfile=stm32mp257f-dk-ca35tdcid-ostl-*.dtb
+# which sets m33_rproc compatible="st,stm32mp2-m33-tee" (requires signed firmware).
+# The plain kernel DTS uses compatible="st,stm32mp2-m33" and allows unsigned firmware.
+# The OP-TEE PLL panic that previously required the OSTL variant is avoided by
+# blacklisting the etnaviv GPU driver in /etc/modprobe.d/blacklist-etnaviv.conf.
+TFA="${DEPLOY}/arm-trusted-firmware/tf-a-stm32mp257f-dk-optee-sdcard.stm32"
+METADATA="${DEPLOY}/arm-trusted-firmware/metadata.bin"
+FIP="${DEPLOY}/fip/fip-stm32mp257f-dk-optee-sdcard.bin"
+BOOTFS="${DEPLOY}/stm32mp257f-custom-image-stm32mp25-disco.splitted-bootfs.ext4"
+VENDORFS="${DEPLOY}/stm32mp257f-custom-image-stm32mp25-disco.splitted-vendorfs.ext4"
+ROOTFS="${DEPLOY}/stm32mp257f-custom-image-stm32mp25-disco.splitted-rootfs.ext4"
+USERFS="${DEPLOY}/stm32mp257f-custom-image-stm32mp25-disco.splitted-userfs.ext4"
 
-# ---- locate artifacts ----
-TFA="${DEPLOY}/tf-a-stm32mp257f-dk.stm32"
-FIP="${DEPLOY}/fip-stm32mp257f-dk.bin"
-KERNEL_DIR="${DEPLOY}"      # fitImage lives here
-ROOTFS="${DEPLOY}/stm32mp257f-custom-image-stm32mp257f-dk.ext4"
-
-for f in "${TFA}" "${FIP}" "${ROOTFS}"; do
+for f in "${TFA}" "${METADATA}" "${FIP}" "${BOOTFS}" "${VENDORFS}" "${ROOTFS}" "${USERFS}"; do
     if [ ! -f "${f}" ]; then
         echo "ERROR: missing artifact: ${f}"
         echo "Run 'bitbake stm32mp257f-custom-image' first."
@@ -53,47 +77,22 @@ for f in "${TFA}" "${FIP}" "${ROOTFS}"; do
     fi
 done
 
-# ---- unmount any auto-mounted partitions ----
-umount "${DEV}"?* 2>/dev/null || true
+echo "=== Flashing STM32MP257F-DK: ${DEV} (${SIZE_GB} GB) ==="
+echo ""
+echo "  TF-A    : ${TFA}"
+echo "  FIP     : ${FIP}"
+echo "  bootfs  : ${BOOTFS}"
+echo "  vendorfs: ${VENDORFS}"
+echo "  rootfs  : ${ROOTFS}"
+echo "  userfs  : ${USERFS}"
+echo ""
+echo "WARNING: ALL DATA ON ${DEV} WILL BE ERASED."
+read -r -p "Type 'yes' to continue: " CONFIRM
+[ "${CONFIRM}" = "yes" ] || { echo "Aborted."; exit 1; }
 
-# ---- wipe existing partition table ----
-dd if=/dev/zero of="${DEV}" bs=1M count=10 status=progress
-
-# ---- create GPT partition table ----
-sgdisk --zap-all "${DEV}"
-
-# Sizes in MiB
-MiB=1048576
-P=1   # partition counter
-
-create_part() {
-    local label=$1 size_mib=$2
-    # Find the next free sector
-    START=$(sgdisk -F "${DEV}")
-    END=$((START + size_mib * 1024 * 1024 / 512 - 1))
-    sgdisk -n "${P}:${START}:+${size_mib}M" -c "${P}:${label}" "${DEV}"
-    P=$((P+1))
-}
-
-create_part fsbl1     1      # p1
-create_part fsbl2     1      # p2
-create_part metadata1 1      # p3
-create_part metadata2 1      # p4
-create_part fip-a     4      # p5
-create_part fip-b     4      # p6
-create_part uenv      1      # p7
-create_part boot-a    64     # p8
-create_part boot-b    64     # p9
-create_part rootfs-a  2048   # p10
-create_part rootfs-b  2048   # p11
-
-# userdata fills the rest
-sgdisk -n "${P}:0:0" -c "${P}:userdata" "${DEV}"
-
-partprobe "${DEV}" 2>/dev/null || true
-sleep 2
-
-# Helper: resolve partition device node (/dev/sdb1 or /dev/mmcblk0p1)
+# ---- helper: resolve partition device node --------------------------------
+# /dev/sdb  → /dev/sdb1, /dev/sdb2, ...
+# /dev/mmcblk0 → /dev/mmcblk0p1, /dev/mmcblk0p2, ...
 part() {
     local n=$1
     if [[ "${DEV}" =~ [0-9]$ ]]; then
@@ -103,57 +102,113 @@ part() {
     fi
 }
 
-echo ""
-echo "=== Writing FSBL (TF-A BL2) ==="
-dd if="${TFA}" of="$(part 1)" bs=512 status=progress
-dd if="${TFA}" of="$(part 2)" bs=512 status=progress
+# ---- unmount any auto-mounted partitions ----------------------------------
+umount "${DEV}"?* 2>/dev/null || true
 
+# ---- wipe first 10 MB (clears old GPT / partition signatures) -------------
 echo ""
-echo "=== Writing FIP (OP-TEE + U-Boot) ==="
-dd if="${FIP}" of="$(part 5)" bs=512 status=progress
+echo "=== Wiping partition table ==="
+dd if=/dev/zero of="${DEV}" bs=1M count=10 status=progress
+sync
 
+# ---- create GPT with ST partition layout ----------------------------------
 echo ""
-echo "=== Writing U-Boot default environment ==="
-UENV_TXT="${SCRIPT_DIR}/../yocto/layers/meta-custom/recipes-bsp/u-boot/files/stm32mp257f-dk-uenv.txt"
-if [ -f "${UENV_TXT}" ]; then
-    dd if=/dev/zero of="$(part 7)" bs=512 count=2048 status=none
-    # fw_setenv requires fw_env.config — use raw dd for initial provisioning
-    cp "${UENV_TXT}" /tmp/uenv_raw.txt
+echo "=== Creating GPT ==="
+sgdisk --zap-all "${DEV}"
+
+# -a 1 disables sector-alignment enforcement so we can use the exact ST offsets
+# Raw binary partitions (TF-A, metadata, FIP)
+sgdisk -a 1 -n  1:34:545        -c  1:fsbla1     -t  1:8300 "${DEV}"
+sgdisk -a 1 -n  2:546:1057      -c  2:fsbla2     -t  2:8300 "${DEV}"
+sgdisk -a 1 -n  3:1058:1569     -c  3:metadata1  -t  3:8300 "${DEV}"
+sgdisk -a 1 -n  4:1570:2081     -c  4:metadata2  -t  4:8300 "${DEV}"
+sgdisk -a 1 -n  5:2082:10273    -c  5:fip-a      -t  5:8300 "${DEV}"
+sgdisk -a 1 -n  6:10274:18465   -c  6:fip-b      -t  6:8300 "${DEV}"
+sgdisk -a 1 -n  7:18466:19489   -c  7:u-boot-env -t  7:8300 "${DEV}"
+# Filesystem partitions (naturally aligned)
+sgdisk -a 1 -n  8:19490:150561  -c  8:bootfs     -t  8:8300 "${DEV}"
+sgdisk -a 1 -n  9:150562:662561 -c  9:vendorfs   -t  9:8300 "${DEV}"
+sgdisk -a 1 -n 10:662562:9051169 -c 10:rootfs    -t 10:8300 "${DEV}"
+sgdisk -a 1 -n 11:9051170:0     -c 11:userfs     -t 11:8300 "${DEV}"
+
+# Fix 1: set fip-a / fip-b PARTUUIDs to match what metadata.bin expects.
+# TF-A reads the metadata and looks for partitions with these exact UUIDs.
+FIP_A_UUID=$(python3 -c "import uuid; d=open('${METADATA}','rb').read(); print(str(uuid.UUID(bytes_le=d[72:88])).upper())")
+FIP_B_UUID=$(python3 -c "import uuid; d=open('${METADATA}','rb').read(); print(str(uuid.UUID(bytes_le=d[96:112])).upper())")
+echo "  fip-a PARTUUID : ${FIP_A_UUID}"
+echo "  fip-b PARTUUID : ${FIP_B_UUID}"
+sgdisk --partition-guid=5:"${FIP_A_UUID}" "${DEV}"
+sgdisk --partition-guid=6:"${FIP_B_UUID}" "${DEV}"
+
+# Fix 2: set rootfs PARTUUID to match what extlinux.conf in bootfs expects.
+# The kernel uses this PARTUUID to mount the root filesystem.
+ROOTFS_UUID=$(python3 -c "
+import subprocess, re
+r = subprocess.run(['strings', '${BOOTFS}'], capture_output=True, text=True)
+m = re.search(r'root=PARTUUID=([0-9a-f-]+)', r.stdout, re.I)
+print(m.group(1).upper() if m else '')
+")
+if [ -n "${ROOTFS_UUID}" ]; then
+    echo "  rootfs PARTUUID: ${ROOTFS_UUID}"
+    sgdisk --partition-guid=10:"${ROOTFS_UUID}" "${DEV}"
+else
+    echo "  WARN: could not extract rootfs PARTUUID from extlinux.conf"
 fi
 
+# Fix 3: set the GPT bootable attribute on bootfs (partition 8).
+# U-Boot's distro_bootcmd runs 'part list -bootable' to find the boot
+# partition; without this flag it falls back to partition 1 and hangs.
+sgdisk -A 8:set:2 "${DEV}"
+
+partprobe "${DEV}" 2>/dev/null || true
+sleep 2
+
+# ---- write TF-A BL2 -------------------------------------------------------
 echo ""
-echo "=== Formatting boot partitions (FAT32) ==="
-mkfs.fat -F 32 -n boot-a "$(part 8)"
-mkfs.fat -F 32 -n boot-b "$(part 9)"
+echo "=== Writing TF-A BL2 (primary + backup) ==="
+dd if="${TFA}" of="$(part 1)" bs=512 conv=notrunc status=progress
+dd if="${TFA}" of="$(part 2)" bs=512 conv=notrunc status=progress
+
+# ---- write FWU metadata ---------------------------------------------------
+echo ""
+echo "=== Writing FWU metadata ==="
+dd if="${METADATA}" of="$(part 3)" bs=512 conv=notrunc status=progress
+dd if="${METADATA}" of="$(part 4)" bs=512 conv=notrunc status=progress
+
+# ---- write FIP (OP-TEE + U-Boot) ------------------------------------------
+echo ""
+echo "=== Writing FIP slot A ==="
+dd if="${FIP}" of="$(part 5)" bs=512 conv=notrunc status=progress
+# Part 6 (fip-b) and part 7 (u-boot-env) left empty — populated by OTA / U-Boot
+
+# ---- write filesystem images ----------------------------------------------
+echo ""
+echo "=== Writing bootfs ($(du -sh "${BOOTFS}" | cut -f1)) ==="
+dd if="${BOOTFS}" of="$(part 8)" bs=4M conv=notrunc status=progress
+e2fsck -fp "$(part 8)" || true
 
 echo ""
-echo "=== Copying kernel + DTB to boot-a ==="
-MOUNT=$(mktemp -d)
-mount "$(part 8)" "${MOUNT}"
-for f in fitImage stm32mp257f-dk.dtb; do
-    [ -f "${KERNEL_DIR}/${f}" ] && cp "${KERNEL_DIR}/${f}" "${MOUNT}/" && echo "  ${f}"
-done
-umount "${MOUNT}"
-rmdir "${MOUNT}"
+echo "=== Writing vendorfs ($(du -sh "${VENDORFS}" | cut -f1)) ==="
+dd if="${VENDORFS}" of="$(part 9)" bs=4M conv=notrunc status=progress
+e2fsck -fp "$(part 9)" || true
 
 echo ""
-echo "=== Writing rootfs to rootfs-a ==="
-dd if="${ROOTFS}" of="$(part 10)" bs=4M status=progress
+echo "=== Writing rootfs ($(du -sh "${ROOTFS}" | cut -f1)) ==="
+dd if="${ROOTFS}" of="$(part 10)" bs=4M conv=notrunc status=progress
 e2fsck -fp "$(part 10)" || true
-resize2fs "$(part 10)"
 
 echo ""
-echo "=== Formatting rootfs-b (empty, for OTA) ==="
-mkfs.ext4 -L rootfs-b "$(part 11)"
-
-echo ""
-echo "=== Formatting userdata ==="
-mkfs.ext4 -L userdata "$(part 12)"
+echo "=== Writing userfs ($(du -sh "${USERFS}" | cut -f1)) ==="
+dd if="${USERFS}" of="$(part 11)" bs=4M conv=notrunc status=progress
+e2fsck -fp "$(part 11)" || true
 
 sync
 echo ""
 echo "=== DONE — SD card ready ==="
-echo "Insert into STM32MP257F-DK, boot switch to SD card."
 echo ""
-echo "First SSH login (after boot):"
-echo "  ssh root@192.168.7.80"
+echo "  1. Insert SD card into STM32MP257F-DK"
+echo "  2. Set boot switch to SD card (BOOT0=1, BOOT1=0, BOOT2=0)"
+echo "  3. Power on — Linux boots in ~30 s"
+echo ""
+echo "  First SSH login:"
+echo "    ssh root@192.168.7.80   (empty password)"

@@ -92,11 +92,22 @@ sudo apt-get install -y \
     chrpath socat cpio python3 python3-pip python3-pexpect \
     xz-utils debianutils iputils-ping python3-git python3-jinja2 \
     libegl1-mesa libsdl1.2-dev pylint xterm python3-subunit \
-    mesa-common-dev zstd liblz4-tool \
+    mesa-common-dev zstd lz4 \
     sgdisk dosfstools e2fsprogs curl \
     # Zephyr
     cmake ninja-build python3-venv
 ```
+
+### Shell requirement
+
+Yocto's `oe-init-build-env` and `init-env.sh` are bash scripts. If your login shell is Fish (or any non-POSIX shell), drop into bash before sourcing them:
+
+```fish
+bash          # start a bash subshell
+source yocto/init-env.sh
+```
+
+All `bitbake` commands must be run from that same bash session.
 
 ### Python tools
 
@@ -170,6 +181,7 @@ This runs `west build -b stm32mp257f_dk/stm32mp257fxx/m33` and copies
 
 ```bash
 cd yocto
+./setup.sh
 source init-env.sh          # activates bitbake, sets CWD to yocto/build/
 bitbake stm32mp257f-custom-image
 ```
@@ -177,7 +189,7 @@ bitbake stm32mp257f-custom-image
 First build takes **2–4 hours** depending on CPU and internet speed.
 Subsequent builds use the shared sstate cache and are much faster.
 
-### Key build outputs (`build/tmp/deploy/images/stm32mp257f-dk/`)
+### Key build outputs (`build/tmp/deploy/images/stm32mp25-disco/`)
 
 | File | Description |
 |------|-------------|
@@ -292,14 +304,14 @@ Build and produce a `.swu` package:
 source yocto/init-env.sh
 bitbake swupdate-image
 # package appears at:
-# build/tmp/deploy/images/stm32mp257f-dk/swupdate-image-stm32mp257f-dk.swu
+# build/tmp/deploy/images/stm32mp25-disco/swupdate-image-stm32mp25-disco.swu
 ```
 
 Push to the board (automatically selects the inactive slot):
 
 ```bash
 ./scripts/ota-update.sh \
-    yocto/build/tmp/deploy/images/stm32mp257f-dk/swupdate-image-stm32mp257f-dk.swu
+    yocto/build/tmp/deploy/images/stm32mp25-disco/swupdate-image-stm32mp25-disco.swu
 ```
 
 Or push manually via curl:
@@ -361,7 +373,7 @@ bitbake stm32mp257f-custom-image
 
 # Build a new .swu package and push:
 bitbake swupdate-image
-./scripts/ota-update.sh build/tmp/deploy/images/stm32mp257f-dk/swupdate-image-*.swu
+./scripts/ota-update.sh build/tmp/deploy/images/stm32mp25-disco/swupdate-image-*.swu
 ```
 
 ---

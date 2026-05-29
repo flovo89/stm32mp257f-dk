@@ -14,6 +14,12 @@ S = "${WORKDIR}"
 
 inherit systemd
 
+# zephyr-m33.elf is a 32-bit ARM Thumb binary (Cortex-M33) intentionally
+# packaged inside an AArch64 image — skip the architecture QA check.
+INSANE_SKIP:${PN} = "arch"
+INHIBIT_PACKAGE_STRIP = "1"
+INHIBIT_PACKAGE_DEBUG_SPLIT = "1"
+
 SYSTEMD_SERVICE:${PN}  = "m33-firmware-start.service"
 SYSTEMD_AUTO_ENABLE    = "enable"
 
