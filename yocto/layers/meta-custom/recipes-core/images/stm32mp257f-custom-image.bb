@@ -51,9 +51,10 @@ IMAGE_INSTALL:append = " \
     libubootenv-bin         \
 "
 
-# M33 coprocessor firmware + startup service
+# M33 coprocessor firmware + startup service + RPMsg userspace tools
 IMAGE_INSTALL:append = " \
     m33-firmware            \
+    rpmsg-tools             \
 "
 
 # Debug / development helpers (remove for production)

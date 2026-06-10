@@ -8,6 +8,7 @@ SRC_URI = " \
     file://zephyr.elf;unpack=false        \
     file://m33-firmware-start.sh          \
     file://m33-firmware-start.service     \
+    file://rpmsg-chat.sh                  \
 "
 
 S = "${WORKDIR}"
@@ -29,10 +30,12 @@ do_install() {
     install -m 0644 ${WORKDIR}/zephyr.elf \
         ${D}${nonarch_base_libdir}/firmware/zephyr-m33.elf
 
-    # Helper script
+    # Helper scripts
     install -d ${D}${sbindir}
     install -m 0755 ${WORKDIR}/m33-firmware-start.sh \
         ${D}${sbindir}/m33-firmware-start.sh
+    install -m 0755 ${WORKDIR}/rpmsg-chat.sh \
+        ${D}${sbindir}/rpmsg-chat.sh
 
     # Systemd unit
     install -d ${D}${systemd_system_unitdir}
@@ -43,5 +46,6 @@ do_install() {
 FILES:${PN} = " \
     ${nonarch_base_libdir}/firmware/zephyr-m33.elf   \
     ${sbindir}/m33-firmware-start.sh                 \
+    ${sbindir}/rpmsg-chat.sh                         \
     ${systemd_system_unitdir}/m33-firmware-start.service \
 "

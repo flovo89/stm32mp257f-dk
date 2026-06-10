@@ -1,8 +1,8 @@
 [Unit]
 Description=Start Zephyr firmware on Cortex-M33 coprocessor
-# Must start after sysfs is ready but before networking (M33 may be needed for PHY init)
-After=sysinit.target local-fs.target
-Before=network.target
+# st-m33firmware-load.service loads the default USBPD firmware after modules are ready.
+# We run after it so the remoteproc sysfs is guaranteed to exist, then replace it with Zephyr.
+After=sysinit.target local-fs.target st-m33firmware-load.service
 DefaultDependencies=no
 
 [Service]

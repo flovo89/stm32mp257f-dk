@@ -94,12 +94,16 @@ static int ep_recv(struct rpmsg_endpoint *ept, void *data, size_t len,
 	ARG_UNUSED(priv);
 
 	char buf[128];
-	size_t n = MIN(len, sizeof(buf) - 1);
+	size_t n = MIN(len, sizeof(buf) - 2);
 
 	memcpy(buf, data, n);
-	buf[n] = '\0';
-	LOG_INF("A35→M33: %s", buf);
-	rpmsg_send(ept, buf, n + 1);
+	/* strip any existing null/newline so we normalise to \n-terminated */
+	while (n > 0 && (buf[n - 1] == '\0' || buf[n - 1] == '\n'))
+		n--;
+	buf[n++] = '\n';
+	buf[n]   = '\0';
+	LOG_INF("A35→M33: %.*s", (int)(n - 1), buf);
+	rpmsg_send(ept, buf, n);
 
 	return RPMSG_SUCCESS;
 }
@@ -111,19 +115,8 @@ static void ep_unbound(struct rpmsg_endpoint *ept)
 
 static void ns_bind_cb(struct rpmsg_device *rdev, const char *name, uint32_t src)
 {
-	if (strcmp(name, RPMSG_CHAN_NAME) != 0) {
-		LOG_WRN("Unexpected NS: %s", name);
-		return;
-	}
-	LOG_INF("NS bind: %s src=0x%x", name, src);
-	int ret = rpmsg_create_ept(&ctrl_ept, rdev, name,
-				   RPMSG_ADDR_ANY, src,
-				   ep_recv, ep_unbound);
-	if (ret) {
-		LOG_ERR("rpmsg_create_ept failed: %d", ret);
-		return;
-	}
-	k_sem_give(&bound_sem);
+	ARG_UNUSED(rdev);
+	LOG_WRN("unexpected NS announcement: %s src=0x%x", name, src);
 }
 
 /* ── Platform init ──────────────────────────────────────────────────────── */
@@ -205,7 +198,7 @@ fail:
 	return NULL;
 }
 
-/* ── Application thread: wait for bind, then heartbeat ─────────────────── */
+/* ── Application thread: wait for endpoint creation, then heartbeat ─────── */
 
 static void app_task(void *a1, void *a2, void *a3)
 {
@@ -213,7 +206,7 @@ static void app_task(void *a1, void *a2, void *a3)
 	ARG_UNUSED(a2);
 	ARG_UNUSED(a3);
 
-	LOG_INF("Waiting for A35 to open " RPMSG_CHAN_NAME " endpoint...");
+	LOG_INF("Waiting for endpoint to be ready...");
 	k_sem_take(&bound_sem, K_FOREVER);
 	LOG_INF("M33 ready — sending heartbeat every 10 s");
 
@@ -225,11 +218,13 @@ static void app_task(void *a1, void *a2, void *a3)
 	char msg[64];
 
 	while (1) {
-		snprintf(msg, sizeof(msg), "M33 heartbeat #%u", count++);
-		int ret = rpmsg_send(&ctrl_ept, msg, strlen(msg) + 1);
+		if (ctrl_ept.dest_addr != RPMSG_ADDR_ANY) {
+			snprintf(msg, sizeof(msg), "M33 heartbeat #%u\n", count++);
+			int ret = rpmsg_send(&ctrl_ept, msg, strlen(msg));
 
-		if (ret < 0) {
-			LOG_WRN("rpmsg_send: %d", ret);
+			if (ret < 0) {
+				LOG_WRN("rpmsg_send: %d", ret);
+			}
 		}
 
 #if HAVE_LED
@@ -266,6 +261,20 @@ static void mng_task(void *a1, void *a2, void *a3)
 		metal_finish();
 		return;
 	}
+
+	/* M33 announces its endpoint to Linux via NS (VIRTIO_DEV_DEVICE pattern).
+	 * Linux will see the channel and the user can communicate via /dev/rpmsgN. */
+	int ret = rpmsg_create_ept(&ctrl_ept, rpdev, RPMSG_CHAN_NAME,
+				   RPMSG_ADDR_ANY, RPMSG_ADDR_ANY,
+				   ep_recv, ep_unbound);
+	if (ret) {
+		LOG_ERR("rpmsg_create_ept: %d", ret);
+		ipm_set_enabled(ipm_dev, 0);
+		metal_finish();
+		return;
+	}
+	LOG_INF("endpoint '" RPMSG_CHAN_NAME "' announced at addr 0x%x", ctrl_ept.addr);
+	k_sem_give(&bound_sem);
 
 	while (1) {
 		k_sem_take(&vdev_sem, K_FOREVER);

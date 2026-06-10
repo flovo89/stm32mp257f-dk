@@ -48,3 +48,21 @@ else
     echo "ERROR: M33 start failed, state=${STATE}" >&2
     exit 1
 fi
+
+# Bind rpmsg_chrdev to the m33-ctrl channel so /dev/rpmsgN is available.
+# rpmsg_chrdev doesn't auto-bind on this BSP, so we do it explicitly.
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    RPMSG_SYSFS=$(ls -d /sys/bus/rpmsg/devices/virtio*.m33-ctrl.* 2>/dev/null | head -n 1)
+    if [ -n "${RPMSG_SYSFS}" ]; then
+        DEV_NAME=$(basename "${RPMSG_SYSFS}")
+        if [ ! -e "${RPMSG_SYSFS}/driver" ]; then
+            echo "rpmsg_chrdev" > "${RPMSG_SYSFS}/driver_override"
+            echo "${DEV_NAME}" > /sys/bus/rpmsg/drivers/rpmsg_chrdev/bind && \
+                echo "rpmsg_chrdev bound to ${DEV_NAME}" || true
+        else
+            echo "rpmsg_chrdev already bound to ${DEV_NAME}"
+        fi
+        break
+    fi
+    sleep 0.5
+done
