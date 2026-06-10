@@ -46,6 +46,7 @@ IMAGE_INSTALL:append = " \
 # OTA update stack
 IMAGE_INSTALL:append = " \
     swupdate                \
+    swupdate-client         \
     libubootenv             \
     libubootenv-bin         \
 "
@@ -75,8 +76,14 @@ IMAGE_ROOTFS_EXTRA_SPACE = "65536"
 # etnaviv GPU driver triggers an OP-TEE PLL lock timeout (panic in
 # clk_stm32_pll_init) on OP-TEE 4.0.0-stm32mp-r3. GPU is not needed for
 # the A35+M33 use case, so blacklist the module.
-ROOTFS_POSTPROCESS_COMMAND:append = " blacklist_etnaviv; "
+ROOTFS_POSTPROCESS_COMMAND:append = " blacklist_etnaviv; install_hwrevision; "
 blacklist_etnaviv() {
     install -d ${IMAGE_ROOTFS}${sysconfdir}/modprobe.d
     echo "blacklist etnaviv" > ${IMAGE_ROOTFS}${sysconfdir}/modprobe.d/blacklist-etnaviv.conf
+}
+
+# swupdate reads /etc/hwrevision to check hardware-compatibility in sw-description.
+# Format: "<board> <revision>" — revision must match hardware-compatibility = ["1.0"].
+install_hwrevision() {
+    echo "stm32mp257f-dk 1.0" > ${IMAGE_ROOTFS}${sysconfdir}/hwrevision
 }

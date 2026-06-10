@@ -1,16 +1,19 @@
 # U-Boot default environment for STM32MP257F-DK A/B dual boot
-# Written to 'uenv' GPT partition by flash-sdcard.sh
+# Built into u-boot-env-ab.bin by do_compile and written to absolute MMC
+# offsets 0x900000/0x940000 by flash-sdcard-ab.sh.
 
-# Active boot slot: 'a' or 'b'
 boot_side=a
-
-# Set to '1' by SWUpdate after writing a new image.
-# U-Boot increments bootcount; if it reaches bootlimit it rolls back.
 upgrade_available=0
 bootcount=0
 bootlimit=3
-
-# Kernel command line additions
 extra_bootargs=console=ttySTM0,115200 earlycon rw
 
-# --- Do not edit below; see boot.cmd for the boot logic ---
+# Memory addresses — must match STM32MP25 memory map (4 GB DRAM at 0x80000000)
+kernel_addr_r=0x8a000000
+fdt_addr_r=0x90000000
+scriptaddr=0x90100000
+pxefile_addr_r=0x90200000
+
+# Boot via extlinux.conf on the active FAT32 slot partition.
+# Partition 8 = boot-a, partition 9 = boot-b.
+bootcmd=if test "${boot_side}" = "b"; then setenv _bp 9; else setenv _bp 8; fi; sysboot mmc 0:${_bp} any ${scriptaddr} /extlinux/extlinux.conf

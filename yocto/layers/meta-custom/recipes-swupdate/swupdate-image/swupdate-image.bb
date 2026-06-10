@@ -5,22 +5,22 @@ LIC_FILES_CHKSUM = "file://${COREBASE}/meta/files/common-licenses/MIT;md5=0835ad
 SRC_URI = " \
     file://sw-description         \
     file://post-update.sh         \
-"
-
-# Pull in the image artifacts we'll bundle
-do_compile[depends] += " \
-    stm32mp257f-custom-image:do_image_complete \
-    virtual/kernel:do_deploy                  \
+    file://update-boot-a.sh       \
+    file://update-boot-b.sh       \
 "
 
 inherit swupdate
 
+# IMAGE_DEPENDS is wired by swupdate-common.bbclass into do_swuimage[depends].
+# do_compile[noexec]="1" in the class, so do_compile[depends] is a no-op.
+IMAGE_DEPENDS = "stm32mp257f-custom-image virtual/kernel"
+
 SWUPDATE_IMAGES = " \
-    stm32mp257f-custom-image \
-    fitImage                 \
+    stm32mp257f-custom-image    \
+    kernel/Image                \
+    kernel/stm32mp257f-dk.dtb   \
 "
 
-SWUPDATE_IMAGES_FSTYPES[stm32mp257f-custom-image] = ".ext4.gz"
-SWUPDATE_IMAGES_FSTYPES[fitImage]                 = ""
-
-S = "${WORKDIR}"
+# .rootfs.ext4.gz → looks for stm32mp257f-custom-image[-<machine>].rootfs.ext4.gz in DEPLOY_DIR_IMAGE.
+# kernel/Image and kernel/stm32mp257f-dk.dtb: full relative paths — looked up exactly under DEPLOY_DIR_IMAGE.
+SWUPDATE_IMAGES_FSTYPES[stm32mp257f-custom-image] = ".rootfs.ext4.gz"

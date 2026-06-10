@@ -1,5 +1,5 @@
 [Match]
-Name=eth0
+Name=end0
 
 [Network]
 Address=192.168.7.80/24
