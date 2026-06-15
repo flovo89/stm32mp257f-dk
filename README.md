@@ -418,3 +418,7 @@ change pin assignments or enable optional hardware.
 **U-Boot rolls back every time**
 : Log into the board before reboot and run
   `fw_setenv upgrade_available 0` to confirm the image is healthy.
+
+# Debug m33 app
+mount -t debugfs none /sys/kernel/debug
+cat /sys/kernel/debug/remoteproc/remoteproc*/trace0 2>/dev/null

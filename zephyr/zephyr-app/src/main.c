@@ -1,11 +1,18 @@
 /*
  * STM32MP257F-DK Cortex-M33 application
  *
- * Communicates with Linux (A35) via RPMsg / OpenAMP over shared DDR using
- * the resource-table mechanism expected by Linux remoteproc.
+ * Communicates with Linux (A35) via RPMsg / OpenAMP over shared DDR.
  *
- * Endpoint "m33-ctrl": echoes every message received from Linux and sends
- * a heartbeat every 10 s.
+ * Endpoint "m33-ctrl":
+ *   - Echoes every text message received from Linux (backward-compatible).
+ *   - Sends a text heartbeat every 10 s.
+ *   - Reads ADC1 channels 2 & 3 (PG2, PG3) at 1 Hz and streams them as
+ *     structured binary frames (see protocol.h).
+ *
+ * Protocol overview (protocol.h):
+ *   Text frames  : first byte != 0xA5 → plain string (heartbeat / echo)
+ *   Binary frames: first byte == 0xA5 → struct proto_hdr + payload
+ *     MSG_TYPE_ADC (0x01): timestamp_ms (u32) + raw[2] (u16 each)
  */
 
 #include <zephyr/kernel.h>
@@ -21,9 +28,15 @@
 #include <string.h>
 #include <stdio.h>
 
+#include "protocol.h"
+#include "adc.h"
+
 LOG_MODULE_REGISTER(m33_app, LOG_LEVEL_DBG);
 
 #define RPMSG_CHAN_NAME "m33-ctrl"
+
+/* ADC sampling interval */
+#define ADC_INTERVAL_MS  1000
 
 #if !DT_HAS_CHOSEN(zephyr_ipc_shm)
 #error "Add a board overlay that sets zephyr,ipc_shm and zephyr,ipc chosen nodes"
@@ -58,10 +71,12 @@ static K_SEM_DEFINE(vdev_sem,  0, 1);
 static K_SEM_DEFINE(bound_sem, 0, 1);
 
 #define THREAD_STACK 2048
-K_THREAD_STACK_DEFINE(mng_stack, THREAD_STACK);
-K_THREAD_STACK_DEFINE(app_stack, THREAD_STACK);
+K_THREAD_STACK_DEFINE(mng_stack,  THREAD_STACK);
+K_THREAD_STACK_DEFINE(app_stack,  THREAD_STACK);
+K_THREAD_STACK_DEFINE(adc_stack,  2048);
 static struct k_thread mng_thread;
 static struct k_thread app_thread;
+static struct k_thread adc_thread;
 
 /* ── IPM / mailbox ─────────────────────────────────────────────────────── */
 
@@ -97,7 +112,6 @@ static int ep_recv(struct rpmsg_endpoint *ept, void *data, size_t len,
 	size_t n = MIN(len, sizeof(buf) - 2);
 
 	memcpy(buf, data, n);
-	/* strip any existing null/newline so we normalise to \n-terminated */
 	while (n > 0 && (buf[n - 1] == '\0' || buf[n - 1] == '\n'))
 		n--;
 	buf[n++] = '\n';
@@ -198,7 +212,64 @@ fail:
 	return NULL;
 }
 
-/* ── Application thread: wait for endpoint creation, then heartbeat ─────── */
+/* ── ADC thread: sample at ADC_INTERVAL_MS, send binary frame ───────────── */
+
+static void adc_task(void *a1, void *a2, void *a3)
+{
+	ARG_UNUSED(a1);
+	ARG_UNUSED(a2);
+	ARG_UNUSED(a3);
+
+	/* Wait until the RPMsg endpoint is ready */
+	k_sem_take(&bound_sem, K_FOREVER);
+	k_sem_give(&bound_sem); /* restore so app_task can also take it */
+
+	if (m33_adc_init() < 0) {
+		LOG_ERR("ADC init failed — ADC thread exiting");
+		return;
+	}
+
+	uint8_t seq = 0;
+
+	while (1) {
+		k_sleep(K_MSEC(ADC_INTERVAL_MS));
+
+		if (ctrl_ept.dest_addr == RPMSG_ADDR_ANY) {
+			continue; /* no Linux listener yet */
+		}
+
+		uint16_t raw[2];
+
+		if (m33_adc_read(raw) < 0) {
+			LOG_WRN("ADC read failed");
+			continue;
+		}
+
+		struct proto_adc_frame frame = {
+			.hdr = {
+				.magic = PROTO_MAGIC,
+				.type  = MSG_TYPE_ADC,
+				.len   = PROTO_ADC_PAYLOAD_LEN,
+				.seq   = seq++,
+			},
+			.data = {
+				.ts_ms = (uint32_t)k_uptime_get(),
+				.raw   = { raw[0], raw[1] },
+			},
+		};
+
+		int ret = rpmsg_send(&ctrl_ept, &frame, sizeof(frame));
+
+		if (ret < 0) {
+			LOG_WRN("rpmsg_send ADC: %d", ret);
+		} else {
+			LOG_DBG("ADC ch0=%u ch1=%u ts=%u ms",
+				raw[0], raw[1], frame.data.ts_ms);
+		}
+	}
+}
+
+/* ── Application thread: heartbeat every 10 s ───────────────────────────── */
 
 static void app_task(void *a1, void *a2, void *a3)
 {
@@ -262,8 +333,6 @@ static void mng_task(void *a1, void *a2, void *a3)
 		return;
 	}
 
-	/* M33 announces its endpoint to Linux via NS (VIRTIO_DEV_DEVICE pattern).
-	 * Linux will see the channel and the user can communicate via /dev/rpmsgN. */
 	int ret = rpmsg_create_ept(&ctrl_ept, rpdev, RPMSG_CHAN_NAME,
 				   RPMSG_ADDR_ANY, RPMSG_ADDR_ANY,
 				   ep_recv, ep_unbound);
@@ -273,7 +342,8 @@ static void mng_task(void *a1, void *a2, void *a3)
 		metal_finish();
 		return;
 	}
-	LOG_INF("endpoint '" RPMSG_CHAN_NAME "' announced at addr 0x%x", ctrl_ept.addr);
+	LOG_INF("endpoint '" RPMSG_CHAN_NAME "' announced at addr 0x%x",
+		ctrl_ept.addr);
 	k_sem_give(&bound_sem);
 
 	while (1) {
@@ -293,6 +363,10 @@ int main(void)
 	k_thread_create(&app_thread, app_stack, THREAD_STACK,
 			app_task, NULL, NULL, NULL,
 			K_PRIO_COOP(7), 0, K_NO_WAIT);
+
+	k_thread_create(&adc_thread, adc_stack, K_THREAD_STACK_SIZEOF(adc_stack),
+			adc_task, NULL, NULL, NULL,
+			K_PRIO_COOP(6), 0, K_NO_WAIT);
 
 	return 0;
 }

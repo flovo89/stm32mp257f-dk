@@ -28,10 +28,21 @@ fi
 
 echo "=== OTA update: ${SWU} → ${BOARD_IP} ==="
 
-# Query the currently active slot
+# Query the currently active slot.
+# Two failure modes to handle:
+#   1. SSH fails (board unreachable)         → || echo "a" fires
+#   2. SSH succeeds but boot_side not yet set → fw_printenv prints nothing,
+#      cut returns "", the || never fires, and CURRENT_SIDE ends up empty.
+# Mode 2 happens on first OTA (boot_side is only written by a successful OTA
+# script run).  Treat empty as "a" — the board defaults to slot A when
+# boot_side is absent, so copy2 (write slot B) is the safe choice.
 echo "Querying active slot..."
 CURRENT_SIDE=$(ssh root@"${BOARD_IP}" \
     "fw_printenv boot_side 2>/dev/null | cut -d= -f2" 2>/dev/null || echo "a")
+if [ -z "${CURRENT_SIDE}" ]; then
+    echo "WARNING: boot_side not set in U-Boot env — defaulting to slot a (first install)"
+    CURRENT_SIDE="a"
+fi
 echo "Currently booted: slot ${CURRENT_SIDE}"
 
 if [ "${CURRENT_SIDE}" = "a" ]; then

@@ -9,6 +9,7 @@ SRC_URI = " \
     file://m33-firmware-start.sh          \
     file://m33-firmware-start.service     \
     file://rpmsg-chat.sh                  \
+    file://rpmsg-adc-reader.py            \
 "
 
 S = "${WORKDIR}"
@@ -36,6 +37,8 @@ do_install() {
         ${D}${sbindir}/m33-firmware-start.sh
     install -m 0755 ${WORKDIR}/rpmsg-chat.sh \
         ${D}${sbindir}/rpmsg-chat.sh
+    install -m 0755 ${WORKDIR}/rpmsg-adc-reader.py \
+        ${D}${sbindir}/rpmsg-adc-reader.py
 
     # Systemd unit
     install -d ${D}${systemd_system_unitdir}
@@ -47,5 +50,6 @@ FILES:${PN} = " \
     ${nonarch_base_libdir}/firmware/zephyr-m33.elf   \
     ${sbindir}/m33-firmware-start.sh                 \
     ${sbindir}/rpmsg-chat.sh                         \
+    ${sbindir}/rpmsg-adc-reader.py                   \
     ${systemd_system_unitdir}/m33-firmware-start.service \
 "

@@ -11,4 +11,5 @@ target_include_directories(app PRIVATE ${LIBMETAL_INCLUDE_DIR} ${OPENAMP_INCLUDE
 
 target_sources(app PRIVATE
     src/main.c
+    src/adc.c
 )

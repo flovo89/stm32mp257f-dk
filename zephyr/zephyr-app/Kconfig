@@ -1,0 +1,14 @@
+mainmenu "STM32MP257F M33 Application"
+
+config APP_USE_STM32_LL_ADC
+	bool "Enable STM32 LL ADC for direct ADC3 access"
+	default y
+	select USE_STM32_LL_ADC
+	help
+	  Pulls in the STM32 Low-Level ADC driver sources from the HAL so the
+	  application can call LL_ADC_* functions directly (without the Zephyr
+	  ADC driver framework, which does not yet support the STM32MP2 series).
+	  ADC3 is used because it is the only ADC instance assigned to M33/CID2
+	  in the default RIFSC configuration; ADC12 is CID1/A35-only.
+
+source "Kconfig.zephyr"
