@@ -8,15 +8,15 @@
  *   ADC3 (NS) @ 0x404F0000
  *   ADC3_COMMON (NS) @ 0x404F0300
  *   RCC_ADC3CFGR @ 0x442007EC
- *   ch0 = ADC3_INP4 → PC7 (expansion connector, GPIOC CID2, pre-ANALOG by TF-A)
- *   ch1 = ADC3_INP9 → PC4 (expansion connector, GPIOC CID2, pre-ANALOG by TF-A)
+ *   ch0 = ADC3_INP9 → PC7  (expansion connector, GPIOC CID1, reset-ANALOG)
+ *   ch1 = ADC3_INP6 → PF11 (expansion connector, GPIOF CID1, reset-ANALOG)
  *
  * Clock: kernel clock = CK_ICN_LS_MCU (200 MHz), prescaler /16 → fADC 12.5 MHz.
  * Resolution: 12-bit.  Software trigger.  Single-channel per conversion.
  *
  * Note: ADC3 has no internal voltage monitor channels (VDDCORE/VDDCPU are
  * only available on ADC2 which is CID1/A35).  Connect an external voltage
- * to PC7 and/or PC4 on the expansion connector to get non-zero readings.
+ * to PC7 and/or PF11 on the expansion connector to get non-zero readings.
  */
 
 #include "adc.h"
@@ -38,9 +38,11 @@ LOG_MODULE_REGISTER(m33_adc, LOG_LEVEL_INF);
 #define RCC_ADC3KERSEL_ICN   (1UL << 12)  /* CK_ICN_LS_MCU = 0b01 */
 #define RCC_ADC3EN           (1UL << 1)
 
-/* GPIOC (PC7 = ADC3_INP4, PC4 = ADC3_INP9) — both CID2, pre-set ANALOG by TF-A */
+/* GPIOC (PC7 = ADC3_INP9) and GPIOF (PF11 = ADC3_INP6) — both CID1, reset-ANALOG */
 #define GPIOC_MODER          (*(volatile uint32_t *)(GPIOC_BASE_NS + 0x00UL))
 #define GPIOC_IDR            (*(volatile uint32_t *)(GPIOC_BASE_NS + 0x10UL))
+#define GPIOF_MODER          (*(volatile uint32_t *)(GPIOF_BASE_NS + 0x00UL))
+#define GPIOF_IDR            (*(volatile uint32_t *)(GPIOF_BASE_NS + 0x10UL))
 
 /* Calibration / enable timeout (in busy-wait loops at ~1 μs/iter) */
 #define TIMEOUT_LOOPS        50000U   /* 50 ms */
@@ -101,17 +103,19 @@ int m33_adc_init(void)
 	/*
 	 * 1. Set GPIO pins to ANALOG mode.
 	 *
-	 * Do NOT write RCC_GPIOCCFGR here — protected by RCC sub-resource CID
+	 * Do NOT write RCC_GPIOxCFGR here — protected by RCC sub-resource CID
 	 * filtering (CID1+semaphore), triggers IAC 156 from M33.  GPIO clocks
-	 * are pre-enabled by TF-A.  TF-A also pre-sets PC4/PC7 to ANALOG.
+	 * are pre-enabled by TF-A.  PC7/PF11 are CID1 pins, so these MODER
+	 * writes from M33/CID2 are ignored by RIF — harmless, since both pins
+	 * already reset to ANALOG and stay that way (nothing else claims them).
 	 */
-	GPIOC_MODER |= (3UL << (7 * 2));  /* PC7 = analog (INP4) */
-	GPIOC_MODER |= (3UL << (4 * 2));  /* PC4 = analog (INP9) */
+	GPIOC_MODER |= (3UL << (7 * 2));   /* PC7  = analog (INP9) */
+	GPIOF_MODER |= (3UL << (11 * 2));  /* PF11 = analog (INP6) */
 
 	/* Log digital pin states — expected 0 if unconnected, 1 if at 3.3V. */
-	LOG_INF("PC7 digital=%u  PC4 digital=%u (0=unconnected/0V, 1=3.3V)",
+	LOG_INF("PC7 digital=%u  PF11 digital=%u (0=unconnected/0V, 1=3.3V)",
 		(unsigned int)((GPIOC_IDR >> 7) & 1U),
-		(unsigned int)((GPIOC_IDR >> 4) & 1U));
+		(unsigned int)((GPIOF_IDR >> 11) & 1U));
 
 	/* 2. Select kernel clock and enable gate.
 	 *    ck_flexgen_47 (Linux default, mux=0b00) is unconfigured.
@@ -155,17 +159,17 @@ int m33_adc_init(void)
 	LL_ADC_REG_SetSequencerLength(adc, LL_ADC_REG_SEQ_SCAN_DISABLE);
 	LL_ADC_SetResolution(adc, LL_ADC_RESOLUTION_12B);
 
-	/* Pre-select channels 4 (PC7) and 9 (PC4) in PCSEL */
-	LL_ADC_SetChannelPreselection(adc, LL_ADC_CHANNEL_4);
+	/* Pre-select channel 9 (PC7) and channel 6 (PF11) in PCSEL */
 	LL_ADC_SetChannelPreselection(adc, LL_ADC_CHANNEL_9);
+	LL_ADC_SetChannelPreselection(adc, LL_ADC_CHANNEL_6);
 
 	/* Sampling time: 47.5 cycles (~3.8 μs at 12.5 MHz) */
-	LL_ADC_SetChannelSamplingTime(adc, LL_ADC_CHANNEL_4,
-				      LL_ADC_SAMPLINGTIME_47CYCLES_5);
 	LL_ADC_SetChannelSamplingTime(adc, LL_ADC_CHANNEL_9,
 				      LL_ADC_SAMPLINGTIME_47CYCLES_5);
+	LL_ADC_SetChannelSamplingTime(adc, LL_ADC_CHANNEL_6,
+				      LL_ADC_SAMPLINGTIME_47CYCLES_5);
 
-	LOG_INF("ADC3 ready — ch0=PC7/INP4, ch1=PC4/INP9");
+	LOG_INF("ADC3 ready — ch0=PC7/INP9, ch1=PF11/INP6");
 	return 0;
 }
 
@@ -173,10 +177,10 @@ int m33_adc_read(uint16_t raw[2])
 {
 	int rc;
 
-	rc = read_one(ADC3_NS, LL_ADC_CHANNEL_4, &raw[0]);
+	rc = read_one(ADC3_NS, LL_ADC_CHANNEL_9, &raw[0]);
 	if (rc < 0) {
 		return rc;
 	}
 
-	return read_one(ADC3_NS, LL_ADC_CHANNEL_9, &raw[1]);
+	return read_one(ADC3_NS, LL_ADC_CHANNEL_6, &raw[1]);
 }

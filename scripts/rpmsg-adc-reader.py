@@ -10,8 +10,8 @@ Binary frame layout (12 bytes total):
   [0xA5][type:u8][len:u8][seq:u8] | [ts_ms:u32LE][ch0:u16LE][ch1:u16LE]
 
 Current channel assignments (external GPIO on expansion connector):
-  ch0 = ADC3_INP4   PC7  →  connect external voltage for non-zero readings
-  ch1 = ADC3_INP9   PC4  →  connect external voltage for non-zero readings
+  ch0 = ADC3_INP9   PC7   →  connect external voltage for non-zero readings
+  ch1 = ADC3_INP6   PF11  →  connect external voltage for non-zero readings
 
 Usage (on the board, as root):
   python3 rpmsg-adc-reader.py          # auto-detect /dev/rpmsgN
