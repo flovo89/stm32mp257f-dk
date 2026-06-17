@@ -12,7 +12,7 @@ the Flutter web dashboard as static files.
 Usage (on the board, as root):
   python3 scripts/rpmsg-ws-server.py
   python3 scripts/rpmsg-ws-server.py --web-dir /path/to/frontend/build/web
-  python3 scripts/rpmsg-ws-server.py --vref 3300
+  python3 scripts/rpmsg-ws-server.py --vref 1800
 
 Install dependency (once):
   pip3 install websockets
@@ -190,8 +190,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="RPMsg WebSocket bridge + HTTP server")
     ap.add_argument("--web-dir", default=default_web,
                     help=f"Flutter build/web output dir (default: {default_web})")
-    ap.add_argument("--vref", type=int, default=3300,
-                    help="ADC reference voltage in mV (default: 3300)")
+    ap.add_argument("--vref", type=int, default=1800,
+                    help="ADC reference voltage in mV (default: 1800)")
     args = ap.parse_args()
 
     print(f"Starting — vref={args.vref} mV")

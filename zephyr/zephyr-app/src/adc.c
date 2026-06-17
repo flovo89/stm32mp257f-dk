@@ -112,8 +112,8 @@ int m33_adc_init(void)
 	GPIOC_MODER |= (3UL << (7 * 2));   /* PC7  = analog (INP9) */
 	GPIOF_MODER |= (3UL << (11 * 2));  /* PF11 = analog (INP6) */
 
-	/* Log digital pin states — expected 0 if unconnected, 1 if at 3.3V. */
-	LOG_INF("PC7 digital=%u  PF11 digital=%u (0=unconnected/0V, 1=3.3V)",
+	/* Log digital pin states — expected 0 if unconnected, 1 if at 1.8V. */
+	LOG_INF("PC7 digital=%u  PF11 digital=%u (0=unconnected/0V, 1=1.8V)",
 		(unsigned int)((GPIOC_IDR >> 7) & 1U),
 		(unsigned int)((GPIOF_IDR >> 11) & 1U));
 

@@ -59677,7 +59677,7 @@ s=A.W(a).h("a4<1,bk>")
 s=A.P(new A.a4(a,new A.a2c(B.b.gS(a).a),s),s.h("ad.E"))
 return s},
 P(a){var s=this,r=null,q=s.uN(s.w),p=s.uN(s.x),o=s.uN(s.y),n=t.V,m=A.c([new A.K2(s.d,r),B.HB],n)
-return new A.uq(new A.q_(B.LF,m,B.r,B.fu,new A.IE(r,r,1/0,56),r),new A.DX(B.zv,A.abK(A.c([A.a9O(B.yg,3.3,0,q,"ADC ch0 \u2014 PC7 (INP9)",B.c.M(s.z,3)+" V","V"),B.i8,A.a9O(B.jl,3.3,0,p,"ADC ch1 \u2014 PF11 (INP6)",B.c.M(s.Q,3)+" V","V"),B.i8,A.a9O(B.xR,r,r,o,"Encoder position (A=PF13  B=PF14  Z=PF15)",""+s.as+"  counts  \u2022  "+s.at+" rev","cnt")],n),B.cC,B.aV),r),r)}}
+return new A.uq(new A.q_(B.LF,m,B.r,B.fu,new A.IE(r,r,1/0,56),r),new A.DX(B.zv,A.abK(A.c([A.a9O(B.yg,1.8,0,q,"ADC ch0 \u2014 PC7 (INP9)",B.c.M(s.z,3)+" V","V"),B.i8,A.a9O(B.jl,1.8,0,p,"ADC ch1 \u2014 PF11 (INP6)",B.c.M(s.Q,3)+" V","V"),B.i8,A.a9O(B.xR,r,r,o,"Encoder position (A=PF13  B=PF14  Z=PF15)",""+s.as+"  counts  \u2022  "+s.at+" rev","cnt")],n),B.cC,B.aV),r),r)}}
 A.a28.prototype={
 $0(){return this.a.d=B.MB},
 $S:0}

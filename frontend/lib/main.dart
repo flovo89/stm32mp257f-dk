@@ -10,7 +10,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 const int    _kWsPort    = 8765;
 const int    _kMaxPoints = 60;   // seconds of history shown
-const double _kAdcMaxV   = 3.3;
+const double _kAdcMaxV   = 1.8;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
