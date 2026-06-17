@@ -18,7 +18,8 @@
 #define PROTO_MAGIC     0xA5u
 
 /* Message types */
-#define MSG_TYPE_ADC    0x01u   /* Two analog channels */
+#define MSG_TYPE_ADC      0x01u   /* Two analog channels */
+#define MSG_TYPE_ENCODER  0x02u   /* Quadrature encoder position */
 
 /* Frame header — must be packed so sizeof == 4 */
 struct __attribute__((packed)) proto_hdr {
@@ -41,5 +42,20 @@ struct __attribute__((packed)) proto_adc_frame {
 };
 
 #define PROTO_ADC_PAYLOAD_LEN  ((uint8_t)sizeof(struct proto_adc_payload))
+
+/* Payload for MSG_TYPE_ENCODER */
+struct __attribute__((packed)) proto_encoder_payload {
+	uint32_t ts_ms;       /* k_uptime_get() at sample time */
+	int32_t  position;    /* signed 4x quadrature count, since boot/reset */
+	uint32_t index_count; /* number of Z (index) pulses seen */
+};
+
+/* Complete encoder frame */
+struct __attribute__((packed)) proto_encoder_frame {
+	struct proto_hdr             hdr;
+	struct proto_encoder_payload data;
+};
+
+#define PROTO_ENCODER_PAYLOAD_LEN  ((uint8_t)sizeof(struct proto_encoder_payload))
 
 #endif /* PROTOCOL_H */

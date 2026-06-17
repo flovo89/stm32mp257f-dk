@@ -12,3 +12,6 @@ tools/net-tools/
 
 downloads
 sstate-cache
+
+# Flutter SDK (auto-downloaded by scripts/build-frontend.sh)
+.flutter/

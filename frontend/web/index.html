@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    $FLUTTER_BASE_HREF is replaced by `flutter build web`.
+    Leave it as-is.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="STM32MP257F-DK M33 sensor dashboard">
+
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="STM32 Dashboard">
+
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>STM32 M33 Dashboard</title>
+
+  <style>
+    body {
+      margin: 0;
+      background-color: #0D1117;
+    }
+  </style>
+</head>
+<body>
+  <!--
+    flutter_bootstrap_js is injected here by `flutter build web` (Flutter 3.22+).
+    If you are on Flutter < 3.22, run `flutter create . --platforms web` to
+    regenerate this file for your SDK version.
+  -->
+  <script>
+    {{flutter_bootstrap_js}}
+  </script>
+</body>
+</html>

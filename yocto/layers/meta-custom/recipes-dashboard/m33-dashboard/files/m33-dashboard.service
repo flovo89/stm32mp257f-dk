@@ -1,0 +1,19 @@
+[Unit]
+Description=STM32 M33 Dashboard — RPMsg WebSocket bridge + HTTP server
+# Wait for the M33 to be running (RPMsg channel must exist) and for the
+# network to be up so the HTTP and WebSocket ports are bindable.
+After=network-online.target m33-firmware-start.service
+Wants=network-online.target
+Requires=m33-firmware-start.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/sbin/rpmsg-ws-server.py \
+    --web-dir /usr/share/m33-dashboard
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

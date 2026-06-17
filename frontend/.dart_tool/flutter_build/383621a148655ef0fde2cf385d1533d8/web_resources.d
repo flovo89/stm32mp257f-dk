@@ -1,0 +1,1 @@
+ /home/flo/projects/stm32mp257f-dk/frontend/build/web/manifest.json:  /home/flo/projects/stm32mp257f-dk/frontend/web/manifest.json /home/flo/projects/stm32mp257f-dk/frontend/web/index.html

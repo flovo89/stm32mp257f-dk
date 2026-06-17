@@ -1,0 +1,12 @@
+{
+    "name": "STM32 M33 Dashboard",
+    "short_name": "STM32",
+    "start_url": ".",
+    "display": "standalone",
+    "background_color": "#0D1117",
+    "theme_color": "#00B4D8",
+    "description": "STM32MP257F-DK M33 sensor dashboard",
+    "orientation": "any",
+    "prefer_related_applications": false,
+    "icons": []
+}

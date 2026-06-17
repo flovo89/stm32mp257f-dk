@@ -6,12 +6,18 @@ Reads binary ADC frames (and prints text frames) from the M33 endpoint.
 The protocol uses a magic byte (0xA5) to distinguish binary frames from
 legacy text messages (heartbeat, echo).
 
-Binary frame layout (12 bytes total):
+Binary frame layout — ADC (type=0x01, 12 bytes total):
   [0xA5][type:u8][len:u8][seq:u8] | [ts_ms:u32LE][ch0:u16LE][ch1:u16LE]
+
+Binary frame layout — encoder (type=0x02, 16 bytes total):
+  [0xA5][type:u8][len:u8][seq:u8] | [ts_ms:u32LE][position:i32LE][index_count:u32LE]
 
 Current channel assignments (external GPIO on expansion connector):
   ch0 = ADC3_INP9   PC7   →  connect external voltage for non-zero readings
   ch1 = ADC3_INP6   PF11  →  connect external voltage for non-zero readings
+
+Quadrature encoder (AMT103-D0500-I5000-S):
+  A = PF13   B = PF14   Z (index, once/rev) = PF15
 
 Usage (on the board, as root):
   python3 rpmsg-adc-reader.py          # auto-detect /dev/rpmsgN
@@ -29,14 +35,18 @@ import subprocess
 import sys
 import time
 
-PROTO_MAGIC   = 0xA5
-MSG_TYPE_ADC  = 0x01
+PROTO_MAGIC      = 0xA5
+MSG_TYPE_ADC     = 0x01
+MSG_TYPE_ENCODER = 0x02
 
 HDR_FMT = "<BBBB"   # magic, type, len, seq
 HDR_LEN = struct.calcsize(HDR_FMT)
 
 ADC_PAYLOAD_FMT = "<IHH"   # ts_ms(u32), raw[0](u16), raw[1](u16)
 ADC_PAYLOAD_LEN = struct.calcsize(ADC_PAYLOAD_FMT)
+
+ENCODER_PAYLOAD_FMT = "<IiI"   # ts_ms(u32), position(i32), index_count(u32)
+ENCODER_PAYLOAD_LEN = struct.calcsize(ENCODER_PAYLOAD_FMT)
 
 EPT_NAME = "m33-ctrl"
 
@@ -86,11 +96,21 @@ def parse_binary(hdr_bytes, fd, csv, vref_mv):
         v0 = raw_to_voltage(ch0, vref_mv)
         v1 = raw_to_voltage(ch1, vref_mv)
         if csv:
-            print(f"{ts_ms},{ch0},{v0:.3f},{ch1},{v1:.3f}", flush=True)
+            print(f"ADC,{ts_ms},{ch0},{v0:.3f},{ch1},{v1:.3f}", flush=True)
         else:
             print(f"[ADC] ts={ts_ms:8d} ms | "
                   f"ch0={ch0:4d} ({v0:6.3f} V)  "
                   f"ch1={ch1:4d} ({v1:6.3f} V)  "
+                  f"seq={seq:3d}",
+                  flush=True)
+    elif mtype == MSG_TYPE_ENCODER and length >= ENCODER_PAYLOAD_LEN:
+        ts_ms, position, index_count = struct.unpack(
+            ENCODER_PAYLOAD_FMT, payload[:ENCODER_PAYLOAD_LEN])
+        if csv:
+            print(f"ENC,{ts_ms},{position},{index_count}", flush=True)
+        else:
+            print(f"[ENC] ts={ts_ms:8d} ms | "
+                  f"position={position:6d}  index_count={index_count:4d}  "
                   f"seq={seq:3d}",
                   flush=True)
     else:
@@ -109,7 +129,7 @@ RPMSG_MAX_SIZE = 512
 def run(dev, vref_mv, csv):
     print(f"Connected to {dev}  (Vref={vref_mv} mV)")
     if csv:
-        print("ts_ms,ch0_raw,ch0_V,ch1_raw,ch1_V", flush=True)
+        print("type,ts_ms,ch0_raw_or_position,ch0_V_or_index_count,ch1_raw,ch1_V", flush=True)
 
     with open(dev, "r+b", buffering=0) as fd:
         # Send a subscribe byte so M33 learns our endpoint address.

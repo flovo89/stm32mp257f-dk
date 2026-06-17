@@ -55,6 +55,7 @@ IMAGE_INSTALL:append = " \
 IMAGE_INSTALL:append = " \
     m33-firmware            \
     rpmsg-tools             \
+    m33-dashboard           \
 "
 
 # Debug / development helpers (remove for production)

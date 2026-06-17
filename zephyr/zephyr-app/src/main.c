@@ -6,13 +6,17 @@
  * Endpoint "m33-ctrl":
  *   - Echoes every text message received from Linux (backward-compatible).
  *   - Sends a text heartbeat every 10 s.
- *   - Reads ADC1 channels 2 & 3 (PG2, PG3) at 1 Hz and streams them as
+ *   - Reads ADC3 channels INP9/PC7 & INP6/PF11 at 1 Hz and streams them as
  *     structured binary frames (see protocol.h).
+ *   - Reads an AMT103 quadrature encoder (A=PF13, B=PF14, Z=PF15) via GPIO
+ *     EXTI and streams position/index count at the same 1 Hz cadence.
  *
  * Protocol overview (protocol.h):
  *   Text frames  : first byte != 0xA5 → plain string (heartbeat / echo)
  *   Binary frames: first byte == 0xA5 → struct proto_hdr + payload
- *     MSG_TYPE_ADC (0x01): timestamp_ms (u32) + raw[2] (u16 each)
+ *     MSG_TYPE_ADC     (0x01): timestamp_ms (u32) + raw[2] (u16 each)
+ *     MSG_TYPE_ENCODER (0x02): timestamp_ms (u32) + position (i32) +
+ *                              index_count (u32)
  */
 
 #include <zephyr/kernel.h>
@@ -30,6 +34,7 @@
 
 #include "protocol.h"
 #include "adc.h"
+#include "encoder.h"
 
 LOG_MODULE_REGISTER(m33_app, LOG_LEVEL_DBG);
 
@@ -229,7 +234,12 @@ static void adc_task(void *a1, void *a2, void *a3)
 		return;
 	}
 
+	if (m33_encoder_init() < 0) {
+		LOG_ERR("Encoder init failed — position will not be streamed");
+	}
+
 	uint8_t seq = 0;
+	uint8_t enc_seq = 0;
 
 	while (1) {
 		k_sleep(K_MSEC(ADC_INTERVAL_MS));
@@ -265,6 +275,30 @@ static void adc_task(void *a1, void *a2, void *a3)
 		} else {
 			LOG_DBG("ADC ch0=%u ch1=%u ts=%u ms",
 				raw[0], raw[1], frame.data.ts_ms);
+		}
+
+		struct proto_encoder_frame enc_frame = {
+			.hdr = {
+				.magic = PROTO_MAGIC,
+				.type  = MSG_TYPE_ENCODER,
+				.len   = PROTO_ENCODER_PAYLOAD_LEN,
+				.seq   = enc_seq++,
+			},
+			.data = {
+				.ts_ms       = (uint32_t)k_uptime_get(),
+				.position    = m33_encoder_get_position(),
+				.index_count = m33_encoder_get_index_count(),
+			},
+		};
+
+		ret = rpmsg_send(&ctrl_ept, &enc_frame, sizeof(enc_frame));
+
+		if (ret < 0) {
+			LOG_WRN("rpmsg_send encoder: %d", ret);
+		} else {
+			LOG_DBG("encoder pos=%d index=%u",
+				enc_frame.data.position,
+				enc_frame.data.index_count);
 		}
 	}
 }
