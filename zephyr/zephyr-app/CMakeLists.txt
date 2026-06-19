@@ -13,4 +13,6 @@ target_sources(app PRIVATE
     src/main.c
     src/adc.c
     src/encoder.c
+    src/pwm.c
+    src/foc.c
 )

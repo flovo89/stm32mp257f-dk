@@ -7,6 +7,8 @@ LIC_FILES_CHKSUM = "file://${COREBASE}/meta/files/common-licenses/MIT;md5=0835ad
 SRC_URI = " \
     file://frontend-web.tar.gz  \
     file://rpmsg-ws-server.py   \
+    file://motor_control.py     \
+    file://m33ctl.py             \
     file://m33-dashboard.service \
 "
 
@@ -25,10 +27,14 @@ do_install() {
     install -d ${D}${datadir}/m33-dashboard
     cp -r ${WORKDIR}/web/. ${D}${datadir}/m33-dashboard/
 
-    # WebSocket + HTTP bridge
+    # WebSocket + HTTP bridge and motor control CLI
     install -d ${D}${sbindir}
     install -m 0755 ${WORKDIR}/rpmsg-ws-server.py \
         ${D}${sbindir}/rpmsg-ws-server.py
+    install -m 0755 ${WORKDIR}/motor_control.py \
+        ${D}${sbindir}/motor_control.py
+    install -m 0755 ${WORKDIR}/m33ctl.py \
+        ${D}${sbindir}/m33ctl
 
     # Systemd unit
     install -d ${D}${systemd_system_unitdir}
@@ -39,5 +45,7 @@ do_install() {
 FILES:${PN} = " \
     ${datadir}/m33-dashboard        \
     ${sbindir}/rpmsg-ws-server.py   \
+    ${sbindir}/motor_control.py     \
+    ${sbindir}/m33ctl               \
     ${systemd_system_unitdir}/m33-dashboard.service \
 "

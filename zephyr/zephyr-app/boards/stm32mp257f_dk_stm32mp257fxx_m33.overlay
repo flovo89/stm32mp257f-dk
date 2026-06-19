@@ -22,14 +22,23 @@
 	};
 
 	/*
-	 * Quadrature encoder inputs (AMT103-D0500-I5000-S).  PF13/14/15 are
-	 * GPIOF pins 13/14/15 — RIFSC CID2, so M33 can configure their MODER
-	 * directly (unlike most other GPIO ports, which are CID1/A35-only).
+	 * Pin assignments — all 5 user-accessible CID2 pins are allocated:
+	 *
+	 * PA5  — GPIOA pin 5,  CID2, AF1=TIM2_CH1 → Phase A  (hardware PWM)
+	 * PF13 — GPIOF pin 13, CID2, GPIO output  → Phase B  (software PWM, TIM2 CH2 ISR)
+	 * PF14 — GPIOF pin 14, CID2, GPIO output  → Phase C  (software PWM, TIM2 CH3 ISR)
+	 * PF15 — GPIOF pin 15, CID2, GPIO input   → Encoder A
+	 * PG5  — GPIOG pin 5,  CID2, GPIO input   → Encoder B
+	 *
+	 * Bridge enable: no hardware pin — tie to 3V3, use duty=0 to disable.
+	 * Encoder Z (index): not wired — PF15 repurposed for Encoder A.
+	 * ADC inputs PC7/PF11: CID1 but work as analog (ANALOG = reset state).
+	 *
+	 * PWM pins are configured directly in pwm.c via MODER/AFR writes.
 	 */
 	zephyr_user: zephyr,user {
-		encoder-a-gpios = <&gpiof 13 GPIO_ACTIVE_HIGH>;
-		encoder-b-gpios = <&gpiof 14 GPIO_ACTIVE_HIGH>;
-		encoder-z-gpios = <&gpiof 15 GPIO_ACTIVE_HIGH>;
+		encoder-a-gpios = <&gpiof 15 GPIO_ACTIVE_HIGH>;
+		encoder-b-gpios = <&gpiog 5  GPIO_ACTIVE_HIGH>;
 	};
 };
 
@@ -39,9 +48,8 @@
 
 /*
  * USART6 defaults to pinctrl on PF13 (TX) / PF14 (RX), which conflicts with
- * the encoder A/B GPIOs above — the UART driver would reconfigure those pins
- * to AF7 at boot. USART6 is unused by this app (console is on UART5), so
- * disable it to free the pins.
+ * the Phase B/C PWM outputs above. Disable it to prevent the UART driver
+ * from reconfiguring those pins to AF7 at boot.
  */
 &usart6 {
 	status = "disabled";

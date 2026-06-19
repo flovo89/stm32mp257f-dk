@@ -15,9 +15,11 @@ Features:
 - eMMC, USB, I2C, CAN exposed via standard kernel drivers
 - M33 Zephyr firmware loaded automatically at boot via Linux remoteproc
 - RPMsg channel between A35 and M33 for inter-processor communication
-- ADC3 sampling on two channels (PC7 / INP9, PF11 / INP6) at 1 Hz
-- Quadrature encoder on PF13/PF14/PF15 (A/B/Z), 4× software decode
-- Web dashboard served from the board — live graphs for both ADC channels and encoder position
+- FOC (Field-Oriented Control) BLDC motor control loop on M33 at 10 kHz
+- INA240 current sensing: ADC3 ch0 on PC7/INP9, ch1 on PF11/INP6
+- Quadrature encoder on PF15/PG5 (A/B), 4× software EXTI decode
+- 3-phase PWM: PA5 hardware TIM2_CH4 AF8 (Phase A) + PF13/PF14 GPIO software PWM (Phases B/C)
+- Speed, angle, and open-loop voltage control from Linux via RPMsg; web dashboard at 50 Hz
 - Dual A/B partition layout — OTA updates over Ethernet via SWUpdate
 - Automatic rollback if new image fails to boot (U-Boot watchdog counter)
 
@@ -57,6 +59,8 @@ stm32mp257f-dk/
 │           │   └── files/
 │           │       ├── frontend-web.tar.gz     ← built by build-frontend.sh
 │           │       ├── rpmsg-ws-server.py      ← staged by build-frontend.sh
+│           │       ├── motor_control.py        ← staged by build-frontend.sh
+│           │       ├── m33ctl.py               ← staged by build-frontend.sh
 │           │       └── m33-dashboard.service
 │           ├── recipes-swupdate/
 │           └── wic/stm32mp257f-dk-dualboot.wks
@@ -68,9 +72,11 @@ stm32mp257f-dk/
 │   │   ├── prj.conf
 │   │   ├── boards/stm32mp257f_dk_stm32mp257fxx_m33.overlay
 │   │   └── src/
-│   │       ├── main.c           ← ADC + encoder loop, RPMsg frames
+│   │       ├── main.c           ← RPMsg + task loop
 │   │       ├── adc.c / adc.h    ← ADC3, ch0=PC7/INP9, ch1=PF11/INP6
 │   │       ├── encoder.c / .h   ← quadrature decode via GPIO EXTI
+│   │       ├── pwm.c / pwm.h    ← TIM2 center-aligned PWM (PA5 HW + PF13/PF14 SW)
+│   │       ├── foc.c / foc.h    ← FOC loop: Clarke/Park, PI controllers, SVPWM
 │   │       └── protocol.h       ← binary frame format
 │   └── zephyr/                  ← cloned by west update
 │
@@ -83,8 +89,12 @@ stm32mp257f-dk/
     ├── build-zephyr.sh          ← west build + copy ELF to Yocto layer
     ├── build-frontend.sh        ← flutter build web + stage for Yocto
     ├── rpmsg-ws-server.py       ← RPMsg → WebSocket + HTTP bridge (port 8765/8080)
-    ├── rpmsg-adc-reader.py      ← simple CLI reader (debug use)
+    ├── m33ctl.py                ← unified M33 CLI: status / monitor / motor control
+    ├── rpmsg-adc-reader.py      ← legacy direct reader (use m33ctl instead)
+    ├── rpmsg-chat.sh            ← low-level RPMsg debug shell (stop dashboard first)
+    ├── motor_control.py         ← legacy motor CLI   (use m33ctl instead)
     ├── flash-sdcard-ab.sh       ← initial SD card provisioning
+    ├── fix-sdcard-ab.sh         ← post-wic patch: fix PARTUUIDs + copy DTB to boot-a
     └── ota-update.sh            ← push OTA update, auto slot selection
 ```
 
@@ -186,9 +196,11 @@ The Flutter build output must exist before bitbake runs — `m33-dashboard.bb` p
 
 On the first run this downloads the Flutter SDK (~700 MB) into `.flutter/` automatically, then builds and tarballs the web output into the recipe's `files/` directory. Subsequent runs skip the download.
 
-The script stages two files for BitBake:
-- `yocto/layers/meta-custom/recipes-dashboard/m33-dashboard/files/frontend-web.tar.gz`
-- `yocto/layers/meta-custom/recipes-dashboard/m33-dashboard/files/rpmsg-ws-server.py`
+The script stages four files for BitBake into the recipe `files/` directory:
+- `frontend-web.tar.gz` — compiled Flutter web app
+- `rpmsg-ws-server.py` — WebSocket bridge daemon
+- `motor_control.py` — motor control CLI (legacy, kept for compatibility)
+- `m33ctl.py` — unified M33 CLI (installed as `/usr/sbin/m33ctl`)
 
 ---
 
@@ -331,29 +343,49 @@ ssh root@192.168.7.80 fw_setenv upgrade_available 0
 
 ```
 Linux A35                          Zephyr M33
-─────────────────                  ────────────────────────────────
-rpmsg-ws-server.py ←─ RPMsg ────→  ADC3 ch0 (PC7/INP9)  @ 1 Hz
-port 8765 (WS)         channel     ADC3 ch1 (PF11/INP6)  @ 1 Hz
-port 8080 (HTTP)    "m33-ctrl"     Encoder A/B/Z (PF13/14/15)
-Browser dashboard ←────────────
+─────────────────                  ─────────────────────────────────────────
+rpmsg-ws-server.py ←─ RPMsg ────→  FOC loop 10 kHz (TIM2 ISR)
+port 8765 (WS)         channel       ├─ ADC3 ch0 PC7/INP9  (INA240 phase A)
+port 8080 (HTTP)    "m33-ctrl"       ├─ ADC3 ch1 PF11/INP6 (INA240 phase B)
+Browser dashboard ←────────────      ├─ Encoder A/B: PF15, PG5
+m33ctl            ──────────────→    └─ PWM: PA5(A-HW), PF13(B-SW), PF14(C-SW)
+PB5 (gate enable) ─ gpio-cdev ──→  (external gate driver EN)
 ```
 
 Binary frame protocol (see `zephyr-app/src/protocol.h`):
 
 | Type | Payload | Rate |
 |------|---------|------|
-| `0x01` ADC | ts_ms, ch0_raw (u16), ch1_raw (u16) | 1 Hz |
-| `0x02` Encoder | ts_ms, position (i32), index_count (u32) | 1 Hz |
+| `0x01` ADC | ts_ms, ch0_raw (u16), ch1_raw (u16) | 50 Hz |
+| `0x02` Encoder | ts_ms, position (i32), index_count (u32) | 50 Hz |
+| `0x03` Motor cmd | mode (u8), setpoint (f32) | on demand (Linux→M33) |
+| `0x04` Motor status | ts_ms, speed_rads, angle_rad, id_ma, iq_ma, state, fault | 50 Hz |
 
-### Communicating from Linux (debug)
+### Communicating from Linux
+
+Use `m33ctl` — it automatically routes through the WebSocket bridge
+(`m33-dashboard.service`) when it is running, so it never conflicts with the
+dashboard over `/dev/rpmsg0`.  Falls back to direct device access when the
+service is stopped.
 
 ```bash
-# Simple CLI reader (prints ADC voltages and encoder position)
-python3 /usr/sbin/rpmsg-adc-reader.py
+# Check M33 + bridge status, and which route commands will use:
+m33ctl status
 
-# Raw RPMsg access
-cat /dev/rpmsg0
-echo "hello M33" > /dev/rpmsg0
+# Stream all live data (ADC + encoder + motor):
+m33ctl monitor
+
+# Stream only motor status:
+m33ctl monitor --motor
+
+# Motor control:
+m33ctl motor speed    30       # 30 rad/s ≈ 286 RPM  (closed-loop, needs sensors)
+m33ctl motor angle    1.57     # hold at 90°          (closed-loop, needs sensors)
+m33ctl motor openloop 2.0      # 2 V on q-axis        (open-loop, no sensors needed)
+m33ctl motor off
+
+# Send a command and watch live status:
+m33ctl motor speed 20 --monitor
 ```
 
 ### M33 trace log
@@ -383,17 +415,54 @@ bitbake swupdate-image
 
 ## Peripherals
 
-| Peripheral | Interface | Notes |
-|------------|-----------|-------|
+| Peripheral | Pin(s) | Notes |
+|------------|--------|-------|
 | Ethernet (GMAC) | `eth0` | Static IP 192.168.7.80/24 |
-| ADC3 ch0 | PC7 (INP9) | 0–3.3 V, 12-bit, sampled by M33 |
-| ADC3 ch1 | PF11 (INP6) | 0–3.3 V, 12-bit, sampled by M33 |
-| Encoder A/B/Z | PF13/PF14/PF15 | 4× quadrature, software EXTI decode |
+| PWM Phase A | PA5 | TIM2_CH4 AF8, hardware center-aligned 10 kHz |
+| PWM Phase B | PF13 | GPIO output, TIM2 CH2 compare ISR (software) |
+| PWM Phase C | PF14 | GPIO output, TIM2 CH3 compare ISR (software) |
+| Bridge enable | PB5 | Linux GPIO (CID1/A35), driven HIGH on motor on, LOW on off |
+| ADC current ch0 | PC7 (INP9) | INA240 phase A, 12-bit, 1.8 V ref |
+| ADC current ch1 | PF11 (INP6) | INA240 phase B, 12-bit, 1.8 V ref |
+| Encoder A | PF15 | GPIO input, EXTI both-edge, 4× quadrature |
+| Encoder B | PG5 | GPIO input, EXTI both-edge |
 | eMMC | `/dev/mmcblk0` | `mmc-utils` installed |
 | USB Host | `/dev/sdX`, `/dev/ttyUSBX` | `usbutils` installed |
 | I2C buses | `/dev/i2c-X` | `i2c-tools` installed |
 | UART console | `/dev/ttySTM0` | 115200 baud |
 | CAN | `can0` | `can-utils` installed |
+
+### Pin assignment rationale
+
+Only 5 GPIO pins on the STM32MP257F-DK are both RIFSC CID2 (M33-writable) and
+physically accessible on the expansion headers: **PA5, PF13, PF14, PF15, PG5**.
+All other candidate pins are CID1 (A35-only), CID3 (M0+), or electrically
+inaccessible on this board revision. TIM2 is the only CID2-accessible GP timer;
+PA5 (TIM2_CH4, AF8) is its only output pin with a CID2-capable AF — all other
+TIM2 AF pins are CID1. Phases B and C use GPIO toggling from TIM2 compare ISRs.
+PC7 and PF11 work as ADC inputs despite being CID1 because ANALOG mode is the
+GPIO power-on reset state.
+
+The gate driver enable is **PB5** (CID1, controlled by Linux A35). The
+`rpmsg-ws-server.py` daemon sets it HIGH when any motor mode is commanded and
+LOW on `motor off`. To use a different pin pass `--enable-gpio pd1` (or any
+`pXN` name) to `rpmsg-ws-server.py` and update `m33-dashboard.service`.
+
+### Motor control
+
+```bash
+# On the board, as root — use m33ctl (routes via WebSocket when dashboard is running):
+m33ctl motor speed    30       # 30 rad/s ≈ 286 RPM  (closed-loop, needs sensors)
+m33ctl motor angle    1.57     # hold at 90°          (closed-loop, needs sensors)
+m33ctl motor openloop 2.0      # 2 V on q-axis        (open-loop, no sensors needed)
+m33ctl motor off
+m33ctl motor speed 20 --monitor
+```
+
+Closed-loop speed and angle modes require working current sensors (INA240 on PC7/PF11).
+Open-loop mode bypasses current sensing — the setpoint is the q-axis voltage in volts
+(clamped to ±Vdc/√3 ≈ ±13.9 V) and the encoder is used for angle tracking only.
+Start with a small voltage (1–3 V) when testing open-loop.
 
 ---
 

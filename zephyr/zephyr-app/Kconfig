@@ -11,4 +11,13 @@ config APP_USE_STM32_LL_ADC
 	  ADC3 is used because it is the only ADC instance assigned to M33/CID2
 	  in the default RIFSC configuration; ADC12 is CID1/A35-only.
 
+config APP_USE_STM32_LL_TIM
+	bool "Enable STM32 LL TIM for direct TIM2 PWM access"
+	default y
+	select USE_STM32_LL_TIM
+	help
+	  Pulls in the STM32 Low-Level timer driver sources so the application
+	  can call LL_TIM_* functions directly for 3-phase center-aligned PWM
+	  generation on TIM2 (the only general-purpose timer assigned to CID2).
+
 source "Kconfig.zephyr"

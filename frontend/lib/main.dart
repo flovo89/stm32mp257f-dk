@@ -9,7 +9,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const int    _kWsPort    = 8765;
-const int    _kMaxPoints = 60;   // seconds of history shown
+const int    _kMaxPoints = 150;  // 3 seconds of history at 50 Hz
 const double _kAdcMaxV   = 1.8;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -43,6 +43,18 @@ class _DashboardApp extends StatelessWidget {
         textTheme: const TextTheme(
           bodyMedium: TextStyle(color: Color(0xFFE6EDF3)),
         ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: const Color(0xFF0D1117),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFF30363D)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFF30363D)),
+          ),
+        ),
       ),
       home: const _DashboardPage(),
     );
@@ -68,22 +80,34 @@ class _DashboardPageState extends State<_DashboardPage> {
   StreamSubscription<dynamic>? _sub;
   Timer? _retryTimer;
 
-  // Raw data buffers — store (firmware_ts_seconds, value) pairs
+  // ADC/encoder data
   final List<FlSpot> _ch0 = [];
   final List<FlSpot> _ch1 = [];
   final List<FlSpot> _enc = [];
-
-  // Latest values for numeric display
   double _ch0V  = 0;
   double _ch1V  = 0;
   int    _encPos = 0;
   int    _encIdx = 0;
 
-  // ── WS URL derived from the browser's own hostname ──────────────────────
+  // Motor status
+  double _speedRads = 0;
+  double _speedRpm  = 0;
+  double _angleDeg  = 0;
+  double _idMa      = 0;
+  double _iqMa      = 0;
+  String _motorState = 'off';
+  int    _fault      = 0;
+  final List<FlSpot> _spdPts  = [];
+  final List<FlSpot> _iqPts   = [];
+
+  // Motor command UI
+  String _cmdMode      = 'off';
+  final _spCtrl        = TextEditingController(text: '0');
+  bool   _cmdSending   = false;
+
+  // ── WS URL ──────────────────────────────────────────────────────────────
 
   String get _wsUrl {
-    // Uri.base gives the URL of the serving page
-    // (e.g. http://192.168.1.100:8080/) so .host gives the board IP.
     final host = Uri.base.host.isEmpty ? 'localhost' : Uri.base.host;
     return 'ws://$host:$_kWsPort';
   }
@@ -101,6 +125,7 @@ class _DashboardPageState extends State<_DashboardPage> {
     _retryTimer?.cancel();
     _sub?.cancel();
     _channel?.sink.close();
+    _spCtrl.dispose();
     super.dispose();
   }
 
@@ -110,17 +135,13 @@ class _DashboardPageState extends State<_DashboardPage> {
     _sub?.cancel();
     _channel?.sink.close();
     setState(() => _state = _ConnState.connecting);
-
     try {
-      final uri = Uri.parse(_wsUrl);
-      _channel = WebSocketChannel.connect(uri);
+      _channel = WebSocketChannel.connect(Uri.parse(_wsUrl));
       _sub = _channel!.stream.listen(
         _onMessage,
         onError: (_) => _scheduleRetry(),
         onDone:       _scheduleRetry,
       );
-      // WebSocketChannel.connect doesn't throw immediately — treat the listen
-      // as success until the stream errors.
       setState(() => _state = _ConnState.connected);
     } catch (_) {
       _scheduleRetry();
@@ -140,9 +161,7 @@ class _DashboardPageState extends State<_DashboardPage> {
     late Map<String, dynamic> msg;
     try {
       msg = jsonDecode(raw as String) as Map<String, dynamic>;
-    } catch (_) {
-      return;
-    }
+    } catch (_) { return; }
 
     final double t = ((msg['ts_ms'] as num?) ?? 0) / 1000.0;
 
@@ -152,10 +171,22 @@ class _DashboardPageState extends State<_DashboardPage> {
         _ch1V = ((msg['ch1_v'] as num?) ?? 0).toDouble();
         _push(_ch0, FlSpot(t, _ch0V));
         _push(_ch1, FlSpot(t, _ch1V));
+
       } else if (msg['type'] == 'encoder') {
         _encPos = (msg['position']    as num?)?.toInt() ?? 0;
         _encIdx = (msg['index_count'] as num?)?.toInt() ?? 0;
         _push(_enc, FlSpot(t, _encPos.toDouble()));
+
+      } else if (msg['type'] == 'motor_status') {
+        _speedRads  = ((msg['speed_rads'] as num?) ?? 0).toDouble();
+        _speedRpm   = ((msg['speed_rpm']  as num?) ?? 0).toDouble();
+        _angleDeg   = ((msg['angle_deg']  as num?) ?? 0).toDouble();
+        _idMa       = ((msg['id_ma']      as num?) ?? 0).toDouble();
+        _iqMa       = ((msg['iq_ma']      as num?) ?? 0).toDouble();
+        _motorState = (msg['state'] as String?) ?? 'off';
+        _fault      = (msg['fault']  as num?)?.toInt() ?? 0;
+        _push(_spdPts, FlSpot(t, _speedRpm));
+        _push(_iqPts,  FlSpot(t, _iqMa));
       }
     });
   }
@@ -165,27 +196,38 @@ class _DashboardPageState extends State<_DashboardPage> {
     if (list.length > _kMaxPoints) list.removeAt(0);
   }
 
-  // Remap so the oldest visible point is always at x = 0.
   List<FlSpot> _rel(List<FlSpot> raw) {
     if (raw.isEmpty) return const [];
     final base = raw.first.x;
     return raw.map((s) => FlSpot(s.x - base, s.y)).toList();
   }
 
+  // ── Motor command ────────────────────────────────────────────────────────
+
+  void _sendMotorCmd() {
+    if (_channel == null) return;
+    final sp = double.tryParse(_spCtrl.text) ?? 0.0;
+    final cmd = jsonEncode({
+      'cmd':      'motor',
+      'mode':     _cmdMode,
+      'setpoint': sp,
+    });
+    _channel!.sink.add(cmd);
+    setState(() => _cmdSending = true);
+    Future.delayed(const Duration(milliseconds: 300),
+        () => setState(() => _cmdSending = false));
+  }
+
   // ── Build ────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    final ch0 = _rel(_ch0);
-    final ch1 = _rel(_ch1);
-    final enc = _rel(_enc);
-
     return Scaffold(
       appBar: AppBar(
         backgroundColor: const Color(0xFF161B22),
         surfaceTintColor: Colors.transparent,
         title: const Text(
-          'STM32MP257F-DK — M33 Dashboard',
+          'STM32MP257F-DK — M33 FOC Dashboard',
           style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
         ),
         actions: [
@@ -198,10 +240,49 @@ class _DashboardPageState extends State<_DashboardPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // ── Motor control card ──────────────────────────────────────────
+            _MotorControlCard(
+              motorState: _motorState,
+              speedRpm:   _speedRpm,
+              speedRads:  _speedRads,
+              angleDeg:   _angleDeg,
+              idMa:       _idMa,
+              iqMa:       _iqMa,
+              fault:      _fault,
+              cmdMode:    _cmdMode,
+              onModeChanged: (m) => setState(() => _cmdMode = m),
+              spCtrl:     _spCtrl,
+              onSend:     _state == _ConnState.connected ? _sendMotorCmd : null,
+              sending:    _cmdSending,
+            ),
+            const SizedBox(height: 12),
+            // ── Speed chart ─────────────────────────────────────────────────
             _ChartCard(
-              title:    'ADC ch0 — PC7 (INP9)',
+              title:    'Motor speed',
+              valueStr: '${_speedRpm.toStringAsFixed(1)} RPM',
+              spots:    _rel(_spdPts),
+              color:    const Color(0xFFFF7B54),
+              minY:     null,
+              maxY:     null,
+              yUnit:    'RPM',
+            ),
+            const SizedBox(height: 12),
+            // ── Iq chart ────────────────────────────────────────────────────
+            _ChartCard(
+              title:    'q-axis current (torque)',
+              valueStr: '${_iqMa.toStringAsFixed(1)} mA',
+              spots:    _rel(_iqPts),
+              color:    const Color(0xFFFF6B6B),
+              minY:     null,
+              maxY:     null,
+              yUnit:    'mA',
+            ),
+            const SizedBox(height: 12),
+            // ── ADC charts ─────────────────────────────────────────────────
+            _ChartCard(
+              title:    'Phase A current sense — PC7/INP9 (INA240)',
               valueStr: '${_ch0V.toStringAsFixed(3)} V',
-              spots:    ch0,
+              spots:    _rel(_ch0),
               color:    const Color(0xFF58A6FF),
               minY:     0,
               maxY:     _kAdcMaxV,
@@ -209,9 +290,9 @@ class _DashboardPageState extends State<_DashboardPage> {
             ),
             const SizedBox(height: 12),
             _ChartCard(
-              title:    'ADC ch1 — PF11 (INP6)',
+              title:    'Phase B current sense — PF11/INP6 (INA240)',
               valueStr: '${_ch1V.toStringAsFixed(3)} V',
-              spots:    ch1,
+              spots:    _rel(_ch1),
               color:    const Color(0xFF3FB950),
               minY:     0,
               maxY:     _kAdcMaxV,
@@ -219,11 +300,11 @@ class _DashboardPageState extends State<_DashboardPage> {
             ),
             const SizedBox(height: 12),
             _ChartCard(
-              title:    'Encoder position (A=PF13  B=PF14  Z=PF15)',
-              valueStr: '$_encPos  counts  •  $_encIdx rev',
-              spots:    enc,
+              title:    'Encoder position (A=PF15  B=PG5)',
+              valueStr: '$_encPos counts  •  $_encIdx rev',
+              spots:    _rel(_enc),
               color:    const Color(0xFFFF9F1C),
-              minY:     null,   // auto-scale
+              minY:     null,
               maxY:     null,
               yUnit:    'cnt',
             ),
@@ -234,11 +315,186 @@ class _DashboardPageState extends State<_DashboardPage> {
   }
 }
 
+// ── Motor control card ────────────────────────────────────────────────────────
+
+class _MotorControlCard extends StatelessWidget {
+  const _MotorControlCard({
+    required this.motorState,
+    required this.speedRpm,
+    required this.speedRads,
+    required this.angleDeg,
+    required this.idMa,
+    required this.iqMa,
+    required this.fault,
+    required this.cmdMode,
+    required this.onModeChanged,
+    required this.spCtrl,
+    required this.onSend,
+    required this.sending,
+  });
+
+  final String   motorState;
+  final double   speedRpm, speedRads, angleDeg, idMa, iqMa;
+  final int      fault;
+  final String   cmdMode;
+  final void Function(String) onModeChanged;
+  final TextEditingController spCtrl;
+  final VoidCallback? onSend;
+  final bool     sending;
+
+  Color get _stateColor => switch (motorState) {
+    'run'   => const Color(0xFF3FB950),
+    'fault' => const Color(0xFFF85149),
+    _       => const Color(0xFF8B949E),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Status row ──────────────────────────────────────────────────
+            Row(
+              children: [
+                Container(
+                  width: 10, height: 10,
+                  decoration: BoxDecoration(
+                    color: _stateColor, shape: BoxShape.circle),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Motor — ${motorState.toUpperCase()}',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    color: _stateColor,
+                  ),
+                ),
+                if (fault != 0) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF85149).withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text('FAULT 0x${fault.toRadixString(16)}',
+                        style: const TextStyle(
+                            color: Color(0xFFF85149), fontSize: 11)),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 12),
+            // ── Status values ────────────────────────────────────────────────
+            Wrap(
+              spacing: 24,
+              runSpacing: 8,
+              children: [
+                _StatVal('Speed',
+                    '${speedRpm.toStringAsFixed(1)} RPM\n'
+                    '${speedRads.toStringAsFixed(2)} rad/s'),
+                _StatVal('Angle', '${angleDeg.toStringAsFixed(1)}°'),
+                _StatVal('Id',    '${idMa.toStringAsFixed(1)} mA'),
+                _StatVal('Iq',    '${iqMa.toStringAsFixed(1)} mA'),
+              ],
+            ),
+            const SizedBox(height: 16),
+            const Divider(color: Color(0xFF30363D)),
+            const SizedBox(height: 12),
+            // ── Command row ──────────────────────────────────────────────────
+            Row(
+              children: [
+                // Mode selector
+                DropdownButton<String>(
+                  value: cmdMode,
+                  dropdownColor: const Color(0xFF161B22),
+                  underline: const SizedBox(),
+                  items: const [
+                    DropdownMenuItem(value: 'off',   child: Text('Off')),
+                    DropdownMenuItem(value: 'speed', child: Text('Speed')),
+                    DropdownMenuItem(value: 'angle', child: Text('Angle')),
+                  ],
+                  onChanged: (v) { if (v != null) onModeChanged(v); },
+                ),
+                const SizedBox(width: 12),
+                // Setpoint input
+                if (cmdMode != 'off') ...[
+                  SizedBox(
+                    width: 120,
+                    child: TextField(
+                      controller: spCtrl,
+                      keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true, signed: true),
+                      style: const TextStyle(fontSize: 13),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 8),
+                        suffixText: cmdMode == 'speed' ? 'rad/s' : 'rad',
+                        suffixStyle: const TextStyle(
+                            color: Color(0xFF8B949E), fontSize: 11),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                ],
+                // Send button
+                ElevatedButton(
+                  onPressed: sending ? null : onSend,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: cmdMode == 'off'
+                        ? const Color(0xFF21262D)
+                        : const Color(0xFF238636),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 8),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6)),
+                  ),
+                  child: Text(
+                    sending ? 'Sent ✓' : (cmdMode == 'off' ? 'Stop' : 'Send'),
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StatVal extends StatelessWidget {
+  const _StatVal(this.label, this.value);
+  final String label, value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: const TextStyle(
+                fontSize: 11, color: Color(0xFF8B949E))),
+        const SizedBox(height: 2),
+        Text(value,
+            style: const TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600)),
+      ],
+    );
+  }
+}
+
 // ── Connection status chip ────────────────────────────────────────────────────
 
 class _StatusChip extends StatelessWidget {
   const _StatusChip({required this.state});
-
   final _ConnState state;
 
   @override
@@ -286,7 +542,6 @@ class _ChartCard extends StatelessWidget {
   double get _xMax => spots.isEmpty ? (_kMaxPoints - 1).toDouble() : spots.last.x;
   double get _xMin => max(0.0, _xMax - (_kMaxPoints - 1));
 
-  // Auto Y bounds with padding; falls back to ±1 on empty data.
   (double lo, double hi) get _yBounds {
     if (minY != null && maxY != null) return (minY!, maxY!);
     if (spots.isEmpty) return (-1, 1);
@@ -308,96 +563,81 @@ class _ChartCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Header row ──────────────────────────────────────────────
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
-                  child: Text(
-                    title,
+                  child: Text(title,
                     style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF8B949E),
-                    ),
-                  ),
+                        fontSize: 12, fontWeight: FontWeight.w500,
+                        color: Color(0xFF8B949E))),
                 ),
                 const SizedBox(width: 8),
-                Text(
-                  valueStr,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: color,
-                  ),
-                ),
+                Text(valueStr,
+                    style: TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.bold,
+                        color: color)),
               ],
             ),
             const SizedBox(height: 12),
-            // ── Chart ───────────────────────────────────────────────────
             SizedBox(
-              height: 180,
+              height: 140,
               child: isEmpty
                   ? Center(
-                      child: Text(
-                        'Waiting for data…',
-                        style: TextStyle(color: Colors.white.withOpacity(0.2)),
-                      ),
-                    )
+                      child: Text('Waiting for data…',
+                          style: TextStyle(
+                              color: Colors.white.withOpacity(0.2))))
                   : LineChart(
-                      duration: const Duration(milliseconds: 80),
+                      duration: const Duration(milliseconds: 50),
                       LineChartData(
-                        minX: _xMin,
-                        maxX: _xMax,
-                        minY: yLo,
-                        maxY: yHi,
+                        minX: _xMin, maxX: _xMax,
+                        minY: yLo,   maxY: yHi,
                         clipData: const FlClipData.all(),
                         lineBarsData: [
                           LineChartBarData(
                             spots:           spots,
                             isCurved:        true,
-                            curveSmoothness: 0.15,
+                            curveSmoothness: 0.1,
                             color:           color,
-                            barWidth:        2,
-                            dotData:         const FlDotData(show: false),
-                            belowBarData:    BarAreaData(
+                            barWidth:        1.5,
+                            dotData: const FlDotData(show: false),
+                            belowBarData: BarAreaData(
                               show:  true,
-                              color: color.withOpacity(0.07),
-                            ),
+                              color: color.withOpacity(0.07)),
                           ),
                         ],
                         gridData: FlGridData(
                           show: true,
-                          drawVerticalLine: true,
                           getDrawingHorizontalLine: (_) =>
-                              FlLine(color: Colors.white.withOpacity(0.07), strokeWidth: 0.5),
+                              FlLine(color: Colors.white.withOpacity(0.07),
+                                     strokeWidth: 0.5),
                           getDrawingVerticalLine: (_) =>
-                              FlLine(color: Colors.white.withOpacity(0.07), strokeWidth: 0.5),
+                              FlLine(color: Colors.white.withOpacity(0.07),
+                                     strokeWidth: 0.5),
                         ),
                         borderData: FlBorderData(
                           show: true,
-                          border: Border.all(color: Colors.white.withOpacity(0.1)),
-                        ),
+                          border: Border.all(
+                              color: Colors.white.withOpacity(0.1))),
                         titlesData: FlTitlesData(
-                          topTitles:   AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                          rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                          topTitles: AxisTitles(
+                              sideTitles: SideTitles(showTitles: false)),
+                          rightTitles: AxisTitles(
+                              sideTitles: SideTitles(showTitles: false)),
                           bottomTitles: AxisTitles(
                             sideTitles: SideTitles(
                               showTitles:   true,
                               reservedSize: 22,
-                              interval:     10,
+                              interval:     1,
                               getTitlesWidget: (val, _) {
                                 final ago = (val - _xMax).round();
+                                if (ago % 3 != 0) return const SizedBox.shrink();
                                 return Padding(
                                   padding: const EdgeInsets.only(top: 4),
-                                  child: Text(
-                                    '${ago}s',
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      color: Colors.white.withOpacity(0.3),
-                                    ),
-                                  ),
+                                  child: Text('${ago}s',
+                                      style: TextStyle(fontSize: 10,
+                                          color: Colors.white.withOpacity(0.3))),
                                 );
                               },
                             ),
@@ -407,21 +647,16 @@ class _ChartCard extends StatelessWidget {
                               showTitles:   true,
                               reservedSize: 46,
                               getTitlesWidget: (val, meta) {
-                                // Skip labels that would overlap the edges
                                 if (val == meta.min || val == meta.max) {
                                   return const SizedBox.shrink();
                                 }
                                 final label = minY != null
                                     ? val.toStringAsFixed(1)
                                     : val.toInt().toString();
-                                return Text(
-                                  label,
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    color: Colors.white.withOpacity(0.3),
-                                  ),
-                                  textAlign: TextAlign.right,
-                                );
+                                return Text(label,
+                                    style: TextStyle(fontSize: 10,
+                                        color: Colors.white.withOpacity(0.3)),
+                                    textAlign: TextAlign.right);
                               },
                             ),
                           ),
@@ -435,4 +670,3 @@ class _ChartCard extends StatelessWidget {
     );
   }
 }
-
