@@ -1,0 +1,61 @@
+cmake:
+  application:
+    configuration-dir: '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr-app'
+    source-dir: '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr-app'
+  board:
+    name: 'stm32mp257f_dk'
+    path:
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/boards/st/stm32mp257f_dk'
+    qualifiers: 'stm32mp257fxx/m33'
+    revision: ''
+  devicetree:
+    bindings-dirs:
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/dts/bindings'
+    files:
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/boards/st/stm32mp257f_dk/stm32mp257f_dk_stm32mp257fxx_m33.dts'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr-app/boards/stm32mp257f_dk_stm32mp257fxx_m33.overlay'
+    include-dirs:
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/modules/hal/ambiq/dts'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/modules/hal/atmel/include'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/modules/hal/bouffalolab/include'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/modules/hal/bouffalolab/include/zephyr'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/modules/hal/gigadevice/include'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/modules/hal/microchip/include'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/modules/hal/microchip/dts'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/modules/hal/nuvoton/dts'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/modules/hal/nxp/dts'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/modules/hal/stm32/dts'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/modules/hal/ti/dts'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/include'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/include/zephyr'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/dts/common'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/dts/vendor'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/dts/rx'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/dts/x86'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/dts/xtensa'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/dts/sparc'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/dts/riscv'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/dts/posix'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/dts/arm64'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/dts/arm'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/dts/arc'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/dts'
+    user-files:
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr-app/boards/stm32mp257f_dk_stm32mp257fxx_m33.overlay'
+  kconfig:
+    files:
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/boards/st/stm32mp257f_dk/stm32mp257f_dk_stm32mp257fxx_m33_defconfig'
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr-app/prj.conf'
+    user-files:
+     - '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr-app/prj.conf'
+  toolchain:
+    name: 'zephyr'
+    path: '/home/flo/zephyr-sdk-1.0.1'
+  zephyr:
+    version: '4.4.0'
+    zephyr-base: '/home/flo/projects/stm32mp257f-dk/zephyr/zephyr'
+version: '0.1.0'
+west:
+  command: '/home/flo/projects/stm32mp257f-dk/venv/bin/west build --pristine -b stm32mp257f_dk/stm32mp257fxx/m33 zephyr-app'
+  topdir: '/home/flo/projects/stm32mp257f-dk/zephyr'
+  version: '1.5.0'

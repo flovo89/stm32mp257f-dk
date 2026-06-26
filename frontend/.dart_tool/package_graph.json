@@ -5,9 +5,8 @@
   "packages": [
     {
       "name": "stm32_dashboard",
-      "version": "1.0.0+1",
+      "version": "2.0.0+1",
       "dependencies": [
-        "fl_chart",
         "flutter",
         "web_socket_channel"
       ],
@@ -49,14 +48,6 @@
         "test_api",
         "vector_math",
         "vm_service"
-      ]
-    },
-    {
-      "name": "fl_chart",
-      "version": "0.69.2",
-      "dependencies": [
-        "equatable",
-        "flutter"
       ]
     },
     {
@@ -243,14 +234,6 @@
         "stream_channel",
         "string_scanner",
         "term_glyph"
-      ]
-    },
-    {
-      "name": "equatable",
-      "version": "2.0.8",
-      "dependencies": [
-        "collection",
-        "meta"
       ]
     },
     {

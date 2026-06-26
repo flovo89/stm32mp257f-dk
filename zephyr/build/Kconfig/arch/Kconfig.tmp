@@ -1,0 +1,12 @@
+# Load Zephyr Arch Kconfig descriptions.
+osource "/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/arch/rx/Kconfig"
+osource "/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/arch/x86/Kconfig"
+osource "/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/arch/xtensa/Kconfig"
+osource "/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/arch/sparc/Kconfig"
+osource "/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/arch/riscv/Kconfig"
+osource "/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/arch/posix/Kconfig"
+osource "/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/arch/openrisc/Kconfig"
+osource "/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/arch/mips/Kconfig"
+osource "/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/arch/arm64/Kconfig"
+osource "/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/arch/arm/Kconfig"
+osource "/home/flo/projects/stm32mp257f-dk/zephyr/zephyr/arch/arc/Kconfig"

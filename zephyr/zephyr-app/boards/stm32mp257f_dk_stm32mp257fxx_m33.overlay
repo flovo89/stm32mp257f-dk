@@ -1,14 +1,21 @@
 /*
- * Board overlay for STM32MP257F-DK / Cortex-M33
+ * Board overlay for STM32MP257F-DK / Cortex-M33 — pulse generator + ADC sampler
  *
  * Defines the shared DDR window used for OpenAMP virtio rings and
  * sets the chosen nodes expected by the openamp_rsc_table subsystem.
  *
- * The address 0x81200000 and size 1 MB must match what the Linux
- * remoteproc / resource table reserves on the A35 side.
+ * Address 0x81200000, size 1 MB — must match the Linux remoteproc reservation.
+ *
+ * Pins used by the application:
+ *   PA5  — GPIOA pin 5, RIFSC CID2, AF8 = TIM2_CH4
+ *           Hardware PWM output, 0–1 MHz, 50 % duty cycle.
+ *           Configured directly in pulse_gen.c via MODER/AFRL registers.
+ *   PF15 — GPIOF pin 15, RIFSC CID2, GPIO input with rising-edge EXTI interrupt.
+ *           Trigger input: each rising edge fires a software ADC3 conversion.
+ *           Declared via zephyr,user node below; read by sampler.c.
+ *   PC7  — ADC3 INP9, RIFSC CID1 but stays ANALOG from power-on reset.
+ *           Sampled by sampler.c on each PF15 rising edge (no MODER write needed).
  */
-
-#include <zephyr/dt-bindings/gpio/gpio.h>
 
 / {
 	chosen {
@@ -21,24 +28,9 @@
 		reg = <0x81200000 DT_SIZE_M(1)>;
 	};
 
-	/*
-	 * Pin assignments — all 5 user-accessible CID2 pins are allocated:
-	 *
-	 * PA5  — GPIOA pin 5,  CID2, AF1=TIM2_CH1 → Phase A  (hardware PWM)
-	 * PF13 — GPIOF pin 13, CID2, GPIO output  → Phase B  (software PWM, TIM2 CH2 ISR)
-	 * PF14 — GPIOF pin 14, CID2, GPIO output  → Phase C  (software PWM, TIM2 CH3 ISR)
-	 * PF15 — GPIOF pin 15, CID2, GPIO input   → Encoder A
-	 * PG5  — GPIOG pin 5,  CID2, GPIO input   → Encoder B
-	 *
-	 * Bridge enable: no hardware pin — tie to 3V3, use duty=0 to disable.
-	 * Encoder Z (index): not wired — PF15 repurposed for Encoder A.
-	 * ADC inputs PC7/PF11: CID1 but work as analog (ANALOG = reset state).
-	 *
-	 * PWM pins are configured directly in pwm.c via MODER/AFR writes.
-	 */
-	zephyr_user: zephyr,user {
-		encoder-a-gpios = <&gpiof 15 GPIO_ACTIVE_HIGH>;
-		encoder-b-gpios = <&gpiog 5  GPIO_ACTIVE_HIGH>;
+	zephyr,user {
+		/* PF15: rising-edge trigger input for ADC sampling (RIFSC CID2) */
+		pulse-in-gpios = <&gpiof 15 GPIO_ACTIVE_HIGH>;
 	};
 };
 
@@ -46,10 +38,13 @@
 	status = "okay";
 };
 
+&gpiof {
+	status = "okay";
+};
+
 /*
- * USART6 defaults to pinctrl on PF13 (TX) / PF14 (RX), which conflicts with
- * the Phase B/C PWM outputs above. Disable it to prevent the UART driver
- * from reconfiguring those pins to AF7 at boot.
+ * USART6 defaults to pinctrl on PF13/PF14; disable it so Zephyr does not
+ * reconfigure those pins (they are used by Linux on the A35 side).
  */
 &usart6 {
 	status = "disabled";

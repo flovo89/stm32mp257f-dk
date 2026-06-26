@@ -1,31 +1,32 @@
 #!/usr/bin/env python3
 """
-RPMsg → WebSocket + HTTP server for the STM32MP257F-DK M33 FOC firmware.
+RPMsg → WebSocket + HTTP server for the STM32MP257F-DK M33 application.
 
-Reads ADC, encoder, and motor-status frames from the M33 RPMsg endpoint and
-broadcasts them as JSON to connected WebSocket clients.  Also accepts motor
-commands from WebSocket clients and forwards them to the M33.
+Reads STATUS and ADC_CHUNK frames from the M33 RPMsg endpoint and broadcasts
+them as JSON to connected WebSocket clients.  Accepts pulse commands from
+WebSocket clients and forwards them to the M33.
 
   Port 8765 — WebSocket  (ws://<board-ip>:8765)
   Port 8080 — HTTP       (http://<board-ip>:8080)  → Flutter build
 
-Usage (on the board, as root):
-  python3 scripts/rpmsg-ws-server.py
-  python3 scripts/rpmsg-ws-server.py --web-dir /path/to/frontend/build/web
-  python3 scripts/rpmsg-ws-server.py --vref 1800
+Broadcast messages (M33 → clients):
+  {"type":"status",    "ts_ms":N, "freq_hz":N, "enabled":bool, "in_freq_hz":N}
+  {"type":"adc_chunk", "ts_ms":N, "samples":[N, ...]}   # 128 u16 values per chunk
 
-Install dependency (once):
-  pip3 install websockets
+Command messages (clients → M33):
+  {"cmd":"pulse", "freq_hz":N}   # 0=stop, 1..1000000=run
+
+Usage (on the board, as root):
+  python3 rpmsg-ws-server.py
+  python3 rpmsg-ws-server.py --web-dir /path/to/frontend/build/web
 """
 
 import argparse
 import asyncio
-import fcntl
 import glob
 import http.server
 import json
 import os
-import re
 import struct
 import sys
 import threading
@@ -36,122 +37,34 @@ import websockets
 # ── Protocol constants (must match protocol.h) ───────────────────────────────
 
 PROTO_MAGIC         = 0xA5
-MSG_TYPE_ADC        = 0x01
-MSG_TYPE_ENCODER    = 0x02
-MSG_TYPE_MOTOR_CMD  = 0x03
-MSG_TYPE_MOTOR_STATUS = 0x04
+MSG_TYPE_SET_FREQ   = 0x01
+MSG_TYPE_STATUS     = 0x02
+MSG_TYPE_ADC_CHUNK  = 0x03
 
-HDR_FMT = "<BBBB"
-HDR_LEN = struct.calcsize(HDR_FMT)
+HDR_FMT = "<BBBB"   # magic, type, len(u8), seq
+HDR_LEN = struct.calcsize(HDR_FMT)   # 4 bytes
 
-ADC_FMT     = "<IHH"          # ts_ms, ch0, ch1
-ADC_LEN     = struct.calcsize(ADC_FMT)
+# STATUS payload: ts_ms(u32), out_freq_hz(u32), out_enabled(u8), in_freq_hz(u32)
+STS_FMT = "<IIBI"
+STS_LEN = struct.calcsize(STS_FMT)   # 13 bytes
 
-ENC_FMT     = "<IiI"          # ts_ms, position, index_count
-ENC_LEN     = struct.calcsize(ENC_FMT)
+# ADC_CHUNK payload: ts_ms(u32), count(u8), samples[128](u16)
+CHUNK_FMT = "<IB128H"
+CHUNK_LEN = struct.calcsize(CHUNK_FMT)   # 261 bytes
 
-STS_FMT     = "<IffffBB"      # ts_ms, speed_rads, angle_rad, id_ma, iq_ma, state, fault
-STS_LEN     = struct.calcsize(STS_FMT)
+CMD_FMT = "<I"     # freq_hz(u32)
+CMD_LEN = struct.calcsize(CMD_FMT)
 
-CMD_PAYLOAD_FMT = "<BfH"      # mode, setpoint, reserved
-CMD_PAYLOAD_LEN = struct.calcsize(CMD_PAYLOAD_FMT)
-
-RPMSG_MAX   = 512
-EPT_NAME    = "m33-ctrl"
-WS_PORT     = 8765
-HTTP_PORT   = 8080
-
-STATE_NAMES = {0: "off", 1: "run", 2: "fault"}
-
-# ── Gate-driver enable GPIO (Linux gpio-cdev, /dev/gpiochipN) ────────────────
-
-class _MotorEnableGPIO:
-    """Toggle a GPIO via the Linux character device API (no CONFIG_GPIO_SYSFS needed)."""
-
-    # ioctl numbers derived from linux/gpio.h
-    _CHIPINFO  = 0x8044B401   # GPIO_GET_CHIPINFO_IOCTL   (_IOR  0xB4,0x01, 68 B)
-    _GETHANDLE = 0xC16CB403   # GPIO_GET_LINEHANDLE_IOCTL (_IOWR 0xB4,0x03,364 B)
-    _SETVALS   = 0xC040B409   # GPIOHANDLE_SET_LINE_VALUES_IOCTL (_IOWR 0xB4,0x09,64 B)
-
-    def __init__(self, pin_name: str) -> None:
-        m = re.match(r'^p([a-z])(\d+)$', pin_name.lower())
-        if not m:
-            raise ValueError(f"Bad pin '{pin_name}' — expected like pb5 or pd1")
-        bank   = m.group(1).upper()
-        offset = int(m.group(2))
-
-        chip = self._find_chip(bank)
-        chip_fd = os.open(chip, os.O_RDWR | os.O_CLOEXEC)
-        try:
-            self._fd = self._open_output(chip_fd, offset)
-        finally:
-            os.close(chip_fd)
-
-        self.set(False)
-        print(f"[ENABLE] {pin_name.upper()} → {chip} offset {offset} initialized LOW (disabled)")
-
-    @staticmethod
-    def _find_chip(bank: str) -> str:
-        target = f"gpio{bank.lower()}"           # "gpiob"
-        for n in range(32):
-            path = f"/dev/gpiochip{n}"
-            if not os.path.exists(path):
-                break
-            try:
-                fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
-                try:
-                    buf = bytearray(68)            # sizeof(gpiochip_info)
-                    fcntl.ioctl(fd, 0x8044B401, buf)
-                    nam = buf[ 0:32].rstrip(b"\x00").decode("ascii", errors="replace").lower()
-                    lbl = buf[32:64].rstrip(b"\x00").decode("ascii", errors="replace").lower()
-                    if target in (nam, lbl) or target in nam or target in lbl:
-                        return path
-                finally:
-                    os.close(fd)
-            except OSError:
-                pass
-        # Fallback: GPIOA=chip0, GPIOB=chip1, … (standard STM32 DT ordering)
-        return f"/dev/gpiochip{ord(bank) - ord('A')}"
-
-    @staticmethod
-    def _open_output(chip_fd: int, offset: int) -> int:
-        # struct gpiohandle_request (364 bytes):
-        #  [  0] __u32 lineoffsets[64]    (256 B)
-        #  [256] __u32 flags              (  4 B)
-        #  [260] __u8  default_values[64] ( 64 B)
-        #  [324] char  consumer_label[32] ( 32 B)
-        #  [356] __u32 lines              (  4 B)
-        #  [360] int   fd   ← filled in by kernel
-        buf = bytearray(364)
-        struct.pack_into("<I",  buf,   0, offset)        # lineoffsets[0]
-        struct.pack_into("<I",  buf, 256, 0x2)           # flags = OUTPUT
-        struct.pack_into("32s", buf, 324, b"m33-enable") # consumer_label
-        struct.pack_into("<I",  buf, 356, 1)             # lines = 1
-        fcntl.ioctl(chip_fd, 0xC16CB403, buf)
-        (line_fd,) = struct.unpack_from("<i", buf, 360)
-        return line_fd
-
-    def set(self, active: bool) -> None:
-        # struct gpiohandle_data: __u8 values[64]
-        buf = bytearray(64)
-        buf[0] = 1 if active else 0
-        try:
-            fcntl.ioctl(self._fd, 0xC040B409, buf)
-        except OSError as e:
-            print(f"[ENABLE] set error: {e}", file=sys.stderr)
-
-    def __del__(self) -> None:
-        try:
-            os.close(self._fd)
-        except Exception:
-            pass
+RPMSG_MAX = 512
+EPT_NAME  = "m33-ctrl"
+WS_PORT   = 8765
+HTTP_PORT = 8080
 
 # ── Shared state ─────────────────────────────────────────────────────────────
 
-_clients: set = set()
-_rpmsg_fd: int = -1   # raw file descriptor for writing motor commands
+_clients:  set = set()
+_rpmsg_fd: int = -1
 _cmd_seq:  int = 0
-_enable_gpio: "_MotorEnableGPIO | None" = None
 
 # ── RPMsg device discovery ───────────────────────────────────────────────────
 
@@ -175,7 +88,7 @@ def find_and_bind_rpmsg() -> str:
 
 # ── RPMsg reader ─────────────────────────────────────────────────────────────
 
-async def rpmsg_reader(queue: asyncio.Queue, vref_mv: int) -> None:
+async def rpmsg_reader(queue: asyncio.Queue) -> None:
     global _rpmsg_fd
     dev  = find_and_bind_rpmsg()
     loop = asyncio.get_running_loop()
@@ -194,53 +107,39 @@ async def rpmsg_reader(queue: asyncio.Queue, vref_mv: int) -> None:
             _, mtype, length, _ = struct.unpack(HDR_FMT, msg[:HDR_LEN])
             payload = msg[HDR_LEN: HDR_LEN + length]
 
-            if mtype == MSG_TYPE_ADC and len(payload) >= ADC_LEN:
-                ts, ch0, ch1 = struct.unpack(ADC_FMT, payload[:ADC_LEN])
+            if mtype == MSG_TYPE_STATUS and len(payload) >= STS_LEN:
+                ts, out_freq, out_en, in_freq = struct.unpack(
+                    STS_FMT, payload[:STS_LEN])
                 await queue.put(json.dumps({
-                    "type":  "adc",
-                    "ts_ms": ts,
-                    "ch0":   ch0,
-                    "ch1":   ch1,
-                    "ch0_v": round(ch0 * vref_mv / 4095.0 / 1000.0, 4),
-                    "ch1_v": round(ch1 * vref_mv / 4095.0 / 1000.0, 4),
+                    "type":       "status",
+                    "ts_ms":      ts,
+                    "freq_hz":    out_freq,   # keep legacy field name for UI compat
+                    "enabled":    bool(out_en),
+                    "in_freq_hz": in_freq,
                 }))
 
-            elif mtype == MSG_TYPE_ENCODER and len(payload) >= ENC_LEN:
-                ts, pos, idx = struct.unpack(ENC_FMT, payload[:ENC_LEN])
-                await queue.put(json.dumps({
-                    "type":        "encoder",
-                    "ts_ms":       ts,
-                    "position":    pos,
-                    "index_count": idx,
-                }))
+            elif mtype == MSG_TYPE_ADC_CHUNK:
+                # hdr.len is a sentinel (0xFF) because 261 > uint8_t max;
+                # use the raw message length to extract the full payload.
+                chunk_payload = msg[HDR_LEN: HDR_LEN + CHUNK_LEN]
+                if len(chunk_payload) >= CHUNK_LEN:
+                    ts, count, *all_s = struct.unpack(CHUNK_FMT, chunk_payload)
+                    await queue.put(json.dumps({
+                        "type":    "adc_chunk",
+                        "ts_ms":   ts,
+                        "samples": list(all_s[:count]),
+                    }))
 
-            elif mtype == MSG_TYPE_MOTOR_STATUS and len(payload) >= STS_LEN:
-                ts, spd, ang, id_ma, iq_ma, state, fault = \
-                    struct.unpack(STS_FMT, payload[:STS_LEN])
-                await queue.put(json.dumps({
-                    "type":        "motor_status",
-                    "ts_ms":       ts,
-                    "speed_rads":  round(spd, 4),
-                    "speed_rpm":   round(spd * 60.0 / 6.2832, 1),
-                    "angle_rad":   round(ang, 4),
-                    "angle_deg":   round(ang * 57.2958, 2),
-                    "id_ma":       round(id_ma, 1),
-                    "iq_ma":       round(iq_ma, 1),
-                    "state":       STATE_NAMES.get(state, "unknown"),
-                    "fault":       fault,
-                }))
+# ── Pulse command sender ──────────────────────────────────────────────────────
 
-# ── Motor command sender ──────────────────────────────────────────────────────
-
-def send_motor_cmd(mode: int, setpoint: float) -> None:
-    global _rpmsg_fd, _cmd_seq, _enable_gpio
+def send_pulse_cmd(freq_hz: int) -> None:
+    global _rpmsg_fd, _cmd_seq
     if _rpmsg_fd < 0:
         return
-    if _enable_gpio is not None:
-        _enable_gpio.set(mode != 0)
-    payload = struct.pack(CMD_PAYLOAD_FMT, mode, setpoint, 0)
-    hdr     = struct.pack("<BBBB", PROTO_MAGIC, MSG_TYPE_MOTOR_CMD,
-                          CMD_PAYLOAD_LEN, _cmd_seq & 0xFF)
+    freq_hz = max(0, min(1_000_000, freq_hz))
+    payload = struct.pack(CMD_FMT, freq_hz)
+    hdr     = struct.pack("<BBBB", PROTO_MAGIC, MSG_TYPE_SET_FREQ,
+                          CMD_LEN, _cmd_seq & 0xFF)
     _cmd_seq += 1
     try:
         os.write(_rpmsg_fd, hdr + payload)
@@ -267,18 +166,14 @@ async def ws_handler(websocket, *_args):
     print(f"[WS] client connected: {addr}  (total: {len(_clients)})")
     try:
         async for raw in websocket:
-            # Accept motor commands from the dashboard:
-            # {"cmd":"motor", "mode":"speed", "setpoint":30.0}
             try:
                 msg = json.loads(raw)
             except Exception:
                 continue
-            if msg.get("cmd") == "motor":
-                mode_map = {"off": 0, "speed": 1, "angle": 2, "openloop": 3}
-                mode = mode_map.get(str(msg.get("mode", "off")), 0)
-                sp   = float(msg.get("setpoint", 0.0))
-                send_motor_cmd(mode, sp)
-                print(f"[CMD] mode={msg.get('mode')} setpoint={sp}")
+            if msg.get("cmd") == "pulse":
+                freq_hz = int(msg.get("freq_hz", 0))
+                send_pulse_cmd(freq_hz)
+                print(f"[CMD] freq_hz={freq_hz}")
     except Exception:
         pass
     finally:
@@ -290,7 +185,7 @@ async def ws_handler(websocket, *_args):
 def start_http_server(web_dir: str) -> None:
     if not os.path.isdir(web_dir):
         print(f"[HTTP] WARNING: web dir '{web_dir}' not found — HTTP server not started.")
-        print( "[HTTP]   Build first:  cd frontend && flutter build web")
+        print( "[HTTP]   Build first:  ./scripts/build-frontend.sh")
         return
 
     class _Handler(http.server.SimpleHTTPRequestHandler):
@@ -305,20 +200,13 @@ def start_http_server(web_dir: str) -> None:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-async def _async_main(web_dir: str, vref_mv: int, enable_gpio_pin: str) -> None:
-    global _enable_gpio
-    if enable_gpio_pin:
-        try:
-            _enable_gpio = _MotorEnableGPIO(enable_gpio_pin)
-        except Exception as e:
-            print(f"[ENABLE] WARNING: could not init GPIO '{enable_gpio_pin}': {e}",
-                  file=sys.stderr)
+async def _async_main(web_dir: str) -> None:
     start_http_server(web_dir)
     queue: asyncio.Queue = asyncio.Queue()
     async with websockets.serve(ws_handler, "0.0.0.0", WS_PORT):
         print(f"[WS]   server running  →  ws://0.0.0.0:{WS_PORT}")
         await asyncio.gather(
-            rpmsg_reader(queue, vref_mv),
+            rpmsg_reader(queue),
             broadcaster(queue),
         )
 
@@ -334,16 +222,12 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="RPMsg WebSocket bridge + HTTP server")
     ap.add_argument("--web-dir", default=default_web)
     ap.add_argument("--vref", type=int, default=1800,
-                    help="ADC reference voltage in mV (default: 1800)")
-    ap.add_argument("--enable-gpio", default="", metavar="PIN",
-                    help="Gate driver enable pin, e.g. pb5 or pd1 (default: disabled)")
+                    help="(unused, kept for backwards compatibility)")
     args = ap.parse_args()
 
-    print(f"Starting — vref={args.vref} mV"
-          + (f"  enable-gpio={args.enable_gpio}" if args.enable_gpio else ""))
+    print(f"Starting rpmsg-ws-server")
     try:
-        asyncio.run(_async_main(os.path.abspath(args.web_dir), args.vref,
-                                args.enable_gpio))
+        asyncio.run(_async_main(os.path.abspath(args.web_dir)))
     except OSError as e:
         if e.errno == 98:
             sys.exit(f"ERROR: port {WS_PORT} in use — stop m33-dashboard service first")

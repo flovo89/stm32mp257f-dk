@@ -56,13 +56,11 @@ mkdir -p "$RECIPE_FILES"
 
 tar czf "$RECIPE_FILES/frontend-web.tar.gz" -C "$FRONTEND_DIR/build" web/
 cp "$REPO_ROOT/scripts/rpmsg-ws-server.py" "$RECIPE_FILES/rpmsg-ws-server.py"
-cp "$REPO_ROOT/scripts/motor_control.py"   "$RECIPE_FILES/motor_control.py"
 cp "$REPO_ROOT/scripts/m33ctl.py"          "$RECIPE_FILES/m33ctl.py"
 
 echo "==> Done."
 echo "    $RECIPE_FILES/frontend-web.tar.gz"
 echo "    $RECIPE_FILES/rpmsg-ws-server.py"
-echo "    $RECIPE_FILES/motor_control.py"
 echo "    $RECIPE_FILES/m33ctl.py"
 echo ""
 echo "Now run:  cd yocto && bitbake stm32mp257f-custom-image"

@@ -1,0 +1,5 @@
+west:
+  command: /home/flo/projects/stm32mp257f-dk/venv/bin/west build --pristine -b stm32mp257f_dk/stm32mp257fxx/m33
+    zephyr-app
+  topdir: /home/flo/projects/stm32mp257f-dk/zephyr
+  version: 1.5.0
